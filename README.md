@@ -1,62 +1,66 @@
 # normdoc-assistant
 
-Приватный **RAG-ассистент по нормативным документам** (ГОСТы, акты ФСТЭК России,
-регламенты и обновления ЕАТ, письма Казначейства). Отвечает на вопросы по
-локальному корпусу документов **со ссылками на источники**, работает
-**полностью офлайн** на своём `llama.cpp` (Vulkan/CUDA/ROCm/CPU) и
-поставляется как **docker-compose**-стек с самохостящимся **Langfuse**.
+A private **RAG assistant over a user's own normative documents** (national
+standards, regulations, government orders, industry guidance). It answers
+questions about a **local document corpus with references to the sources**,
+runs **fully offline** on its own `llama.cpp` backend (Vulkan / CUDA / ROCm /
+CPU), and ships as a **docker-compose** stack with a self-hosted **Langfuse**
+for tracing.
 
-> English TL;DR is at the bottom of this file. Полная русская версия — здесь и в
-> [`README_RU.md`](README_RU.md).
+> Русская версия — в [`README_RU.md`](README_RU.md). This file is the English
+> documentation.
 
 ---
 
-## Содержание
+## Table of contents
 
-1. [Зачем это нужно](#1-зачем-это-нужно)
-2. [Архитектура](#2-архитектура)
-3. [Быстрый старт (Docker)](#3-быстрый-старт-docker)
-4. [Профили железа: AI MAX+ 395 и RTX 3060](#4-профили-железа-ai-max-395-и-rtx-3060)
-5. [Локальный запуск без Docker](#5-локальный-запуск-без-docker)
-6. [Модели: GGUF, GigaChat, каталог РФ-моделей](#6-модели-gguf-gigachat-каталог-рф-моделей)
-7. [Корпус и индекс](#7-корпус-и-индекс)
-8. [HTTP API и примеры запросов](#8-http-api-и-примеры-запросов)
-9. [Мониторинг Langfuse](#9-мониторинг-langfuse)
-10. [Оценка качества (RAGAS) и quality gate](#10-оценка-качества-ragas-и-quality-gate)
-11. [Нагрузочное тестирование и графики](#11-нагрузочное-тестирование-и-графики)
-12. [Тесты](#12-тесты)
+1. [Why](#1-why)
+2. [Architecture](#2-architecture)
+3. [Quick start (Docker)](#3-quick-start-docker)
+4. [Hardware profiles: AI MAX+ 395 and RTX 3060](#4-hardware-profiles-ai-max-395-and-rtx-3060)
+5. [Local run without Docker](#5-local-run-without-docker)
+6. [Models: GGUF, GigaChat, RU model catalog](#6-models-gguf-gigachat-ru-model-catalog)
+7. [Corpus and index](#7-corpus-and-index)
+8. [HTTP API and example requests](#8-http-api-and-example-requests)
+9. [Langfuse monitoring](#9-langfuse-monitoring)
+10. [Quality evaluation (RAGAS) and quality gate](#10-quality-evaluation-ragas-and-quality-gate)
+11. [Load testing and graphs](#11-load-testing-and-graphs)
+12. [Tests](#12-tests)
 13. [CI/CD](#13-cicd)
-14. [Отчёт](#14-отчёт)
-15. [Структура проекта](#15-структура-проекта)
-16. [Конфигурация](#16-конфигурация)
-17. [Решение проблем](#17-решение-проблем)
-18. [Ограничения и допущения](#18-ограничения-и-допущения)
+14. [Report](#14-report)
+15. [Project structure](#15-project-structure)
+16. [Configuration](#16-configuration)
+17. [Troubleshooting](#17-troubleshooting)
+18. [Limitations and assumptions](#18-limitations-and-assumptions)
 
 ---
 
-## 1. Зачем это нужно
+## 1. Why
 
-**Бизнес-задача.** Инженерам и специалистам по закупкам нужно быстро получать
-точные ответы по нормативке (ФСТЭК №118/№240, распоряжение №824-р, ГОСТы,
-регламенты ЕАТ), не поднимая облачные LLM и не выгружая закрытые документы
-наружу. Ответ должен быть **проверяемым**: с указанием документа и страницы.
+**The task.** People who work with regulations and standards need fast, precise
+answers from a document base (standards, orders, regulations, guidance notes)
+**without sending internal or restricted documents to a cloud LLM**. Every
+answer must be **verifiable**: it must point to the exact document and page.
 
-**Что делает система:**
+The assistant is **domain-agnostic** — it is bound to *your* document corpus,
+not to any particular subject area. Point it at your own documents and it
+answers strictly from them.
 
-- парсит корпус (PDF/RTF/ODT, включая сканы через OCR), чистит и чанкует текст;
-- строит векторный индекс в Qdrant (эмбеддинги — локальные, напр. `e5-small`);
-- опционально реранкует кандидатов (`bge-reranker-v2-m3`);
-- генерирует ответ локальной LLM через `llama.cpp` со строгим системным
-  промптом «отвечай только по контексту»;
-- **граундит цитаты**: каждая ссылка `[n]` сверяется с реальными метаданными
-  извлечённых чанков, выдуманные источники удаляются;
-- трейсит запросы в Langfuse (ретрив, генерация, latency, токены);
-- измеряет качество (RAGAS) и производительность (perf + нагрузочные тесты с
-  графиками).
+**What the system does:**
+
+- parses a corpus (PDF/RTF/ODT, including scans via OCR), cleans and chunks text;
+- builds a vector index in Qdrant (embeddings are local, e.g. `e5-small`);
+- optionally reranks candidates (`bge-reranker-v2-m3`);
+- generates an answer with a local LLM via `llama.cpp` and a strict
+  "answer only from the context" system prompt;
+- **grounds citations**: every `[n]` reference is checked against the real
+  metadata of the retrieved chunks, and invented sources are dropped;
+- traces requests in Langfuse (retrieval, generation, latency, tokens);
+- measures quality (RAGAS) and performance (perf + load tests with graphs).
 
 ---
 
-## 2. Архитектура
+## 2. Architecture
 
 ```
                  ┌──────────────────────────────────────────────────────┐
@@ -66,284 +70,284 @@
                          │               │                   │
                  ┌───────▼──────┐  ┌─────▼──────────┐  ┌─────▼──────────┐
                  │   Qdrant     │  │  llama.cpp     │  │   Langfuse     │
-                 │ (векторы)    │  │  (Vulkan/CUDA/ │  │ (трейсы,       │
-                 │ 6333         │  │   ROCm/CPU)    │  │  latency)      │
+                 │  (vectors)   │  │  (Vulkan/CUDA/ │  │ (traces,       │
+                 │  6333        │  │   ROCm/CPU)    │  │  latency)      │
                  └──────────────┘  └────────────────┘  └────────────────┘
 ```
 
-- **Слой LLM** (`src/normdoc/llm.py`) — единая точка входа `call_llm`,
-  провайдеры `openai` (OpenAI-совместимый: llama.cpp/Ollama/vLLM/LM Studio) и
-  `gigachat` (облако Sber, OAuth+REST).
-- **Ретрив** (`src/normdoc/indexing.py`) — Qdrant + LlamaIndex, реранкер.
-- **Ассистент** (`src/normdoc/assistant.py`) — оркестрация + замер latency.
-- **Парсинг/чанкинг** (`src/normdoc/parsing.py`) — PyMuPDF, OCR-сайдкары,
-  семантический чанкинг по токенам.
-- **Цитаты** (`src/normdoc/prompts.py`) — `ground_citations` убирает
-  галлюцинированные источники.
+- **LLM layer** (`src/normdoc/llm.py`) — a single entry point `call_llm` with
+  providers `openai` (OpenAI-compatible: llama.cpp/Ollama/vLLM/LM Studio) and
+  `gigachat` (Sber cloud, OAuth+REST).
+- **Retrieval** (`src/normdoc/indexing.py`) — Qdrant + LlamaIndex, reranker.
+- **Assistant** (`src/normdoc/assistant.py`) — orchestration + latency metering.
+- **Parsing/chunking** (`src/normdoc/parsing.py`) — PyMuPDF, OCR sidecars,
+  token-based semantic chunking.
+- **Citations** (`src/normdoc/prompts.py`) — `ground_citations` removes
+  hallucinated sources.
 
 ---
 
-## 3. Быстрый старт (Docker)
+## 3. Quick start (Docker)
 
-Требуется Docker 24+ и Docker Compose v2. Стек — в [`docker-compose.yml`](docker-compose.yml).
+Requires Docker 24+ and Docker Compose v2. Stack: [`docker-compose.yml`](docker-compose.yml).
 
 ```bash
-# 1) Конфигурация
+# 1) Configuration
 cp .env.example .env
-# отредактируйте .env: как минимум укажите каталог моделей и LLM_MODEL
+# edit .env: at minimum set the models directory and LLM_MODEL
 
-# 2) Скачайте GGUF-модель в ./models (пример — Meno-Lite; см. §6)
+# 2) Download a GGUF model into ./models (example — Meno-Lite; see §6)
 mkdir -p models
-# ... положите, например, models/meno-lite-0.1-Q4_K_M.gguf
+# ... e.g. put models/meno-lite-0.1-Q4_K_M.gguf there
 
-# 3) Поднимите стек под своё железо (см. §4)
+# 3) Bring up the stack for your hardware (see §4)
 docker compose --profile cpu --profile monitoring up -d --build
 
-# 4) Подготовьте корпус и индекс
+# 4) Prepare the corpus and the index
 docker compose --profile tools run --rm app python scripts/prepare_docs.py
 docker compose --profile tools run --rm app python scripts/build_index.py --reset \
     --collection normdoc_e5_small
 
-# 5) Проверьте
+# 5) Check it
 curl -s localhost:8000/health
 curl -s localhost:8000/answer -H 'Content-Type: application/json' \
-     -d '{"question":"Сколько классов защиты устанавливается Требованиями ФСТЭК №118?"}' | jq
+     -d '{"question":"What is an architecture description?"}' | jq
 
-# 6) Откройте Langfuse (трейсы) — http://localhost:3000
-#    API — http://localhost:8000/docs
+# 6) Open Langfuse (traces) — http://localhost:3000
+#    API docs — http://localhost:8000/docs
 ```
 
-`Makefile` — короткие команды: `make up-ai395`, `make index`, `make test`,
-`make ragas`, `make load`, `make report`.
+The `Makefile` offers short commands: `make up-ai395`, `make index`,
+`make test`, `make ragas`, `make load`, `make report`.
 
 ---
 
-## 4. Профили железа: AI MAX+ 395 и RTX 3060
+## 4. Hardware profiles: AI MAX+ 395 and RTX 3060
 
-`llama.cpp` — единственный движок инференса; бэкенд ускорения выбирается
-**профилем docker-compose** (см. [`docker/llama/Dockerfile`](docker/llama/Dockerfile)).
+`llama.cpp` is the only inference engine; the acceleration backend is chosen by
+the **docker-compose profile** (see [`docker/llama/Dockerfile`](docker/llama/Dockerfile)).
 
-| Профиль | Железо | Бэкенд llama.cpp | Команда |
+| Profile | Hardware | llama.cpp backend | Command |
 |---|---|---|---|
 | `ai395` | **AMD Ryzen AI MAX+ 395** / Radeon 8060S (Strix Halo, gfx1151) | **Vulkan** (`/dev/dri`, `/dev/kfd`) | `docker compose --profile ai395 up -d --build` |
-| `rtx3060` | **NVIDIA RTX 3060 12 ГБ** (отдельный бокс, sm_86) | **CUDA** (nvidia runtime) | `docker compose --profile rtx3060 up -d --build` |
-| `rocm` | AMD через ROCm/HIP | **HIP/ROCm** | `docker compose --profile rocm up -d --build` |
-| `cpu` | любая машина | CPU | `docker compose --profile cpu up -d --build` |
+| `rtx3060` | **NVIDIA RTX 3060 12 GB** (separate box, sm_86) | **CUDA** (nvidia runtime) | `docker compose --profile rtx3060 up -d --build` |
+| `rocm` | AMD via ROCm/HIP | **HIP/ROCm** | `docker compose --profile rocm up -d --build` |
+| `cpu` | any machine | CPU | `docker compose --profile cpu up -d --build` |
 | `monitoring` | — | self-hosted **Langfuse** | `docker compose --profile monitoring up -d` |
-| `tools` | — | разовые задачи (индексация/RAGAS/load) | `docker compose --profile tools run --rm app …` |
+| `tools` | — | one-off jobs (indexing/RAGAS/load) | `docker compose --profile tools run --rm app …` |
 
-**Vulkan vs ROCm на AMD.** По умолчанию для AI MAX+ 395 используется **Vulkan**:
-он даёт стабильный запуск на RADV/Mesa без возни с версиями ROCm; ROCm-профиль
-оставлен как альтернатива (нужен `AMDGPU_TARGETS=gfx1151`, задаётся в `.env`).
+**Vulkan vs ROCm on AMD.** The AI MAX+ 395 defaults to **Vulkan**: it starts
+reliably on RADV/Mesa without chasing ROCm versions; the ROCm profile is kept as
+an alternative (needs `AMDGPU_TARGETS=gfx1151`, set in `.env`).
 
-**RTX 3060.** Куда бы ни была вставлена карта (в тот же хост или в отдельный
-«карточный» бокс), запуск одинаков: `--profile rtx3060`. На хосте нужен
+**RTX 3060.** Wherever the card lives (same host or a separate "card" box), the
+launch is identical: `--profile rtx3060`. The host needs
 [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
-Если карта в отдельном боксе — запускайте compose на том боксе и направьте
-`app` на него (`LLM_BASE_URL=http://<бокс>:8080/v1`).
+If the card is in a separate box, run compose on that box and point `app` at it
+(`LLM_BASE_URL=http://<box>:8080/v1`).
 
-Параметры llama.cpp задаются переменными: `MODELS_DIR`, `MODEL_FILE`,
-`MODEL_ALIAS`, `N_CTX`, `N_GPU_LAYERS` (99 — все слои на GPU, 0 — CPU),
+llama.cpp parameters are set by variables: `MODELS_DIR`, `MODEL_FILE`,
+`MODEL_ALIAS`, `N_CTX`, `N_GPU_LAYERS` (99 — all layers on GPU, 0 — CPU),
 `N_PARALLEL`, `THREADS`.
 
 ---
 
-## 5. Локальный запуск без Docker
+## 5. Local run without Docker
 
-Нужны Python 3.12+, [`uv`](https://github.com/astral-sh/uv), Qdrant и
-`llama-server` на хосте.
+You need Python 3.12+, [`uv`](https://github.com/astral-sh/uv), Qdrant and
+`llama-server` on the host.
 
 ```bash
-uv sync --extra perf                # зависимости + графики
+uv sync --extra perf                # dependencies + plotting
 cp .env.example .env                # QDRANT_URL=http://localhost:6333, LLM_BASE_URL=...
 
-# Qdrant (если не запущен)
+# Qdrant (if not running)
 docker run -d --name qdrant -p 6333:6333 qdrant/qdrant:v1.13.3
 
-# локальный llama-server (Vulkan-сборка llama.cpp)
-scripts/serve_llm.sh meno           # или: scripts/start_meno.sh
-# либо любой OpenAI-совместимый сервер на LLM_BASE_URL
+# local llama-server (Vulkan build of llama.cpp)
+scripts/serve_llm.sh meno           # or: scripts/start_meno.sh
+# or any OpenAI-compatible server on LLM_BASE_URL
 
-# корпус + индекс
+# corpus + index
 uv run python scripts/prepare_docs.py
 uv run python scripts/build_index.py --reset --collection normdoc_e5_small
 
-# интерактивный чат
-uv run python scripts/chat.py -q "Что такое описание архитектуры?"
+# interactive chat
+uv run python scripts/chat.py -q "What is an architecture description?"
 
-# HTTP-сервис
+# HTTP service
 uv run python scripts/serve_api.py --port 8000
 ```
 
 ---
 
-## 6. Модели: GGUF, GigaChat, каталог РФ-моделей
+## 6. Models: GGUF, GigaChat, RU model catalog
 
-**Каталог рекомендованных моделей** (с размерами, лицензиями и ссылками):
+**Recommended-model catalog** (sizes, licenses and links):
 
 ```bash
 uv run python scripts/list_models.py --kind llm
 uv run python scripts/list_models.py --kind embedding --format markdown
 ```
 
-В каталоге — локальные РФ-модели для GGUF (`llama.cpp`) и облачные:
-GigaChat, T-lite, QVikhr, RuadaptQwen, Saiga, Qwen, Meno-Lite и др.
-Полное описание — в разделе «Каталог» итогового отчёта.
+The catalog covers local RU models for GGUF (`llama.cpp`) and cloud ones:
+GigaChat, T-lite, QVikhr, RuadaptQwen, Saiga, Qwen, Meno-Lite, and more. The
+full description is in the "Catalog" section of the final report.
 
-**Локальный запуск (GGUF).** Положите `.gguf` в `./models` (или в каталог из
-`MODELS_DIR`) и задайте `MODEL_FILE`/`MODEL_ALIAS`. Профили LLM —
-в [`configs/llms/`](configs/llms/) (`bonsai`, `meno`, `t_lite`, `qvikhr`,
+**Local run (GGUF).** Put a `.gguf` into `./models` (or the directory from
+`MODELS_DIR`) and set `MODEL_FILE`/`MODEL_ALIAS`. LLM profiles live in
+[`configs/llms/`](configs/llms/) (`bonsai`, `meno`, `t_lite`, `qvikhr`,
 `ruadapt`, `saiga`, `qwen`, `gigachat`, `gigachat_api`, `avito`, `fast_local`).
 
-> **Про Avito A-vibe.** Веса модели закрыты, публичного GGUF нет. Поэтому она
-> представлена в каталоге как **OpenAI-совместимый эндпоинт** (профиль
-> `configs/llms/avito.env`): если у вас есть доступ к API/весам, укажите
-> `LLM_BASE_URL` и `LLM_MODEL`, код менять не нужно.
+> **About Avito A-vibe.** The weights are closed and there is no public GGUF.
+> It is therefore represented in the catalog as an **OpenAI-compatible
+> endpoint** (profile `configs/llms/avito.env`): if you have API/weights access,
+> set `LLM_BASE_URL` and `LLM_MODEL` — no code changes needed.
 
-**Облачный GigaChat (Sber).**
+**Cloud GigaChat (Sber).**
 
 ```bash
 LLM_PROVIDER=gigachat
 GIGACHAT_CREDENTIALS=<base64(client_id:client_secret)>
 GIGACHAT_SCOPE=GIGACHAT_API_PERS
-GIGACHAT_VERIFY_SSL=1     # нужен корневой сертификат Минцифры; 0 — для тестов
+GIGACHAT_VERIFY_SSL=1     # requires the Ministry of Digital Development root cert; 0 — for tests
 ```
 
 ---
 
-## 7. Корпус и индекс
+## 7. Corpus and index
 
-**Примеры входных данных** уже в репозитории:
+**Sample input data.** The document corpus is **private and not published** in
+the repository: put your own documents into `data/raw/sources/` (PDF/RTF/ODT;
+scans are OCR'd). The repository ships the sample *questions* and HTTP requests:
 
-- документы: [`data/raw/sources/`](data/raw/sources/) (ГОСТ Р 57100—2025,
-  ГОСТ Р 58412—2019, ФСТЭК №118/№240, распоряжение №824-р, письмо
-  Казначейства, регламент ЕАТ, обновление ЕАТ и др.);
-- вопросы: [`data/qa/golden_qa.jsonl`](data/qa/golden_qa.jsonl) (12 пар
-  «вопрос → эталонный ответ»);
-- HTTP-примеры: [`examples/requests.http`](examples/requests.http).
+- questions: [`data/qa/golden_qa.jsonl`](data/qa/golden_qa.jsonl) — 12
+  `question → ground truth` pairs (in Russian, grounded in the sample standards);
+- HTTP examples: [`examples/requests.http`](examples/requests.http),
+  [`examples/README.md`](examples/README.md).
 
 ```bash
-# конвертация (RTF/ODT→PDF), OCR сканов, чистка, manifest
-uv run python scripts/prepare_docs.py           # --force для повтора
+# conversion (RTF/ODT→PDF), OCR of scans, cleanup, manifest
+uv run python scripts/prepare_docs.py           # --force to repeat
 
-# построение индекса
+# build the index
 uv run python scripts/build_index.py --reset --collection normdoc_e5_small
-#   --mode chars --chunk-size 600 --chunk-overlap 60   # символьный чанкинг
-#   --from-cache                                       # из data/chunks/chunks.json
+#   --mode chars --chunk-size 600 --chunk-overlap 60   # character chunking
+#   --from-cache                                       # from data/chunks/chunks.json
 ```
 
-Эмбеддинги переключаются профилем `configs/embeddings/*.env`
-(`e5_small`, `bge_m3`, `giga_embeddings`, `user_bge_m3`, `roberta`).
+Embeddings are switched by the `configs/embeddings/*.env` profile (`e5_small`,
+`bge_m3`, `giga_embeddings`, `user_bge_m3`, `roberta`).
 
 ---
 
-## 8. HTTP API и примеры запросов
+## 8. HTTP API and example requests
 
-Сервис — `src/normdoc/api.py` (FastAPI). Интерактивная документация:
+Service: `src/normdoc/api.py` (FastAPI). Interactive docs:
 `http://localhost:8000/docs`.
 
-| Метод | Путь | Назначение |
+| Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/health` | статус, коллекция, модель |
-| `POST`| `/answer` | вопрос → ответ, источники, latency, usage |
-| `GET` | `/metrics` | метрики Prometheus (latency/throughput) |
-| `POST`| `/warmup` | прогрев (загрузка моделей в память) |
+| `GET` | `/health` | status, collection, model |
+| `POST`| `/answer` | question → answer, sources, latency, usage |
+| `GET` | `/metrics` | Prometheus metrics (latency/throughput) |
+| `POST`| `/warmup` | warm-up (load models into memory) |
 
 ```bash
 curl -s localhost:8000/answer -H 'Content-Type: application/json' -d '{
-  "question": "В какой срок получатель средств формирует сведения о бюджетном обязательстве?",
+  "question": "Which order approved GOST R 57100—2025?",
   "top_k": 5
 }' | jq
 ```
 
-Ответ:
+Response:
 
 ```json
 {
-  "answer": "Не позднее трёх рабочих дней со дня заключения контракта [1].",
-  "sources": [{"source": "Письмо Казначейства…", "page": 2, "score": 0.83, "snippet": "…"}],
+  "answer": "The standard was approved by Rosstandart order No. 215-st and takes effect on 30 June 2025 [ГОСТ Р 57100—2025, стр. 27].",
+  "sources": [{"source": "ГОСТ Р 57100—2025", "page": 27, "score": 0.83, "snippet": "…"}],
   "latency_s": 14.2, "retrieval_s": 0.4, "generation_s": 13.8,
   "usage": {"prompt_tokens": 1200, "completion_tokens": 64, "total_tokens": 1264},
   "dropped_citations": [], "collection": "normdoc_e5_small", "model": "meno"
 }
 ```
 
-CLI-чат: `uv run python scripts/chat.py` (команды `:sources`, `:quit`).
+CLI chat: `uv run python scripts/chat.py` (commands `:sources`, `:quit`).
 
 ---
 
-## 9. Мониторинг Langfuse
+## 9. Langfuse monitoring
 
-Самохостящийся Langfuse поднимается профилем `monitoring` (Postgres,
-ClickHouse, Redis, MinIO, web, worker). Организация/проект/ключи создаются
-автоматически (`LANGFUSE_INIT_*` в compose), ключи берутся из `.env`.
+The self-hosted Langfuse comes up with the `monitoring` profile (Postgres,
+ClickHouse, Redis, MinIO, web, worker). The organization/project/keys are
+created automatically (`LANGFUSE_INIT_*` in compose); keys are taken from `.env`.
 
 ```bash
 docker compose --profile monitoring up -d
-# UI: http://localhost:3000  (admin@example.com / password123 — из .env)
+# UI: http://localhost:3000  (admin@example.com / password123 — from .env)
 
-# включите трейсинг в приложении
-# .env: LANGFUSE_ENABLED=1; LANGFUSE_HOST=http://langfuse-web:3000 (в compose)
-#       LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY — как в compose-проекте
+# enable tracing in the app
+# .env: LANGFUSE_ENABLED=1; LANGFUSE_HOST=http://langfuse-web:3000 (in compose)
+#       LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY — as in the compose project
 docker compose --profile cpu up -d app
 
-# экспорт последних трейсов в отчёт
+# export the latest traces into the report
 uv run python scripts/langfuse_report.py --limit 50
 ```
 
-Каждый запрос = один trace `rag_answer` с дочерними спанами `retrieve`
-(тип `retriever`) и `generate` (тип `generation`, с токенами). В отчёт
-(`results/langfuse_traces.json` → `results/REPORT.md`) попадают id трейса,
-вопрос, латентность и разбивка по спанам.
+Each request = one `rag_answer` trace with child spans `retrieve`
+(type `retriever`) and `generate` (type `generation`, with tokens). The report
+(`results/langfuse_traces.json` → `results/REPORT.md`) includes the trace id,
+question, latency and per-span breakdown.
 
-**Fallback без сервера.** Если Langfuse-сервер недоступен (например, на
-слабой dev-машине), включите запись трейсов в JSONL — данные те же
-(вопрос, спаны, latency, токены):
+**Fallback without a server.** If the Langfuse server is unavailable (e.g. on a
+weak dev machine), enable writing traces to JSONL — the data is the same
+(question, spans, latency, tokens):
 
 ```bash
 TRACE_JSONL=results/traces_local.jsonl uv run python scripts/chat.py -q "…"
-uv run python scripts/langfuse_report.py        # возьмёт локальный JSONL
+uv run python scripts/langfuse_report.py        # will pick up the local JSONL
 ```
 
 ---
 
-## 10. Оценка качества (RAGAS) и quality gate
+## 10. Quality evaluation (RAGAS) and quality gate
 
-Оценка — на **golden-наборе** `data/qa/golden_qa.jsonl`, судья — локальная LLM
-(`--judge-url`, по умолчанию второй llama-server на `:8081`).
+Evaluation runs on the **golden set** `data/qa/golden_qa.jsonl`; the judge is a
+local LLM (`--judge-url`, by default a second llama-server on `:8081`).
 
 ```bash
-# одиночный прогон (все 12 вопросов)
+# single run (all 12 questions)
 uv run python scripts/evaluate_ragas.py --limit 12
 
-# с quality gate (ненулевой код возврата, если пороги не достигнуты)
+# with the quality gate (non-zero exit code if thresholds are not met)
 uv run python scripts/evaluate_ragas.py --gate
-# пороги в .env: THRESH_FAITHFULNESS / THRESH_CONTEXT_PRECISION / THRESH_CONTEXT_RECALL
+# thresholds in .env: THRESH_FAITHFULNESS / THRESH_CONTEXT_PRECISION / THRESH_CONTEXT_RECALL
 
-# сравнение конфигураций (chunking × эмбеддинги × реранкер × LLM)
+# compare configurations (chunking × embeddings × reranker × LLM)
 uv run python scripts/compare_configs.py --limit 6 --with-perf
 ```
 
-Метрики: **Faithfulness**, **ContextPrecision**, **ContextRecall**.
-Результаты: `results/comparison_ragas.json` (+ `results/ragas_*.json`).
-`--gate` удобно использовать в CI как объективный критерий приёмки.
+Metrics: **Faithfulness**, **ContextPrecision**, **ContextRecall**.
+Results: `results/comparison_ragas.json` (+ `results/ragas_*.json`). The `--gate`
+mode is convenient in CI as an objective acceptance criterion.
 
 ---
 
-## 11. Нагрузочное тестирование и графики
+## 11. Load testing and graphs
 
 ```bash
-# поднять API (docker или локально), затем:
+# start the API (docker or local), then:
 uv run python scripts/load_test.py --url http://localhost:8000 \
     --requests 40 --concurrency 4 --name local
 ```
 
-Скрипт измеряет **RPS**, перцентили латентности (p50/p90/p95/p99), долю ошибок
-и токены/с, и **строит графики** (латентность по запросам, распределение,
-перцентили) → `results/load_local.json` и `results/load_local.png`. Графики
-встраиваются в итоговый отчёт.
+The script measures **RPS**, latency percentiles (p50/p90/p95/p99), the error
+rate and tokens/s, and **plots graphs** (latency per request, distribution,
+percentiles) → `results/load_local.json` and `results/load_local.png`. The
+graphs are embedded in the final report.
 
-Perf-тесты (ретрив/генерация/ток-с по конфигурациям):
+Perf tests (retrieval/generation/tokens-s across configurations):
 
 ```bash
 uv run python scripts/benchmark_rag.py --limit 6 --repeat 2 --name meno
@@ -351,17 +355,17 @@ uv run python scripts/benchmark_rag.py --limit 6 --repeat 2 --name meno
 
 ---
 
-## 12. Тесты
+## 12. Tests
 
 ```bash
 uv run python scripts/run_tests.py            # → results/pytest.txt
 uv run python scripts/run_tests.py -k TestApi -v
 ```
 
-Покрытие (`tests/`): парсинг/OCR/таблицы, чанкинг, цитирование и grounding,
-payload LLM (`reasoning_effort`), провайдеры LLM (`openai`/`gigachat`, кэш
-токена), golden-QA и статистика, отчётность, Langfuse-мониторинг (no-op и
-offline), HTTP-API (FastAPI `TestClient`).
+Coverage (`tests/`): parsing/OCR/tables, chunking, citations and grounding, LLM
+payload (`reasoning_effort`), LLM providers (`openai`/`gigachat`, token cache),
+golden QA and statistics, reporting, Langfuse monitoring (no-op and offline),
+HTTP API (FastAPI `TestClient`).
 
 ---
 
@@ -369,110 +373,98 @@ offline), HTTP-API (FastAPI `TestClient`).
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
 
-- **tests** — линт (ruff, не блокирующий) + pytest, артефакт `results/pytest.txt`;
-- **docker** — матричная сборка образов `app` и `llama-cpu`, публикация в GHCR
-  с тегами (`branch`, `sha`, `latest`);
-- **ragas-load** — на **self-hosted** раннере (GPU/CPU): поднимает стек,
-  строит индекс, гоняет RAGAS с `--gate`, нагрузочный тест и отчёт; выгружает
-  артефакты. Запуск вручную (`workflow_dispatch`).
+- **tests** — lint (ruff, non-blocking) + pytest, artifact `results/pytest.txt`;
+- **docker** — matrix build of the `app` and `llama-cpu` images, published to
+  GHCR with tags (`branch`, `sha`, `latest`);
+- **ragas-load** — on a **self-hosted** runner (GPU/CPU): brings up the stack,
+  builds the index, runs RAGAS with `--gate`, a load test and the report;
+  uploads artifacts. Triggered manually (`workflow_dispatch`).
 
 ---
 
-## 14. Отчёт
+## 14. Report
 
 ```bash
-uv run python scripts/langfuse_report.py      # трейсы (если мониторинг включён)
+uv run python scripts/langfuse_report.py      # traces (if monitoring is on)
 uv run python scripts/report.py               # → results/REPORT.md
 ```
 
-`results/REPORT.md` объединяет: стенд, корпус, RAGAS по конфигурациям,
-perf-таблицу, нагрузочные тесты с графиками, трейсы Langfuse и latency,
-тесты, каталог РФ-моделей и раздел про Docker/сервинг.
+`results/REPORT.md` combines: the test bench, corpus, RAGAS across
+configurations, the perf table, load tests with graphs, Langfuse traces and
+latency, tests, the RU model catalog and the Docker/serving section.
 
 ---
 
-## 15. Структура проекта
+## 15. Project structure
 
 ```
-├── docker-compose.yml          # qdrant + llama (профили) + app + langfuse + tools
-├── Makefile                    # короткие команды запуска
+├── docker-compose.yml          # qdrant + llama (profiles) + app + langfuse + tools
+├── Makefile                    # short run commands
 ├── docker/
-│   ├── app/Dockerfile          # образ RAG-приложения (FastAPI)
+│   ├── app/Dockerfile          # RAG application image (FastAPI)
 │   └── llama/{Dockerfile,entrypoint.sh}   # llama.cpp: Vulkan/CUDA/ROCm/CPU
 ├── configs/
-│   ├── hw/                     # профили железа (ai395, amd_7840hs, rtx3060)
-│   ├── llms/                   # профили LLM (bonsai, meno, gigachat, avito, …)
-│   └── embeddings/             # профили эмбеддингов (e5_small, bge_m3, …)
-├── src/normdoc/                # код: assistant, llm, api, indexing, parsing,
+│   ├── hw/                     # hardware profiles (ai395, amd_7840hs, rtx3060)
+│   ├── llms/                   # LLM profiles (bonsai, meno, gigachat, avito, …)
+│   └── embeddings/             # embedding profiles (e5_small, bge_m3, …)
+├── src/normdoc/                # code: assistant, llm, api, indexing, parsing,
 │                               #   prompts, monitoring, reporting, qa, model_catalog
 ├── scripts/                    # prepare_docs, build_index, chat, serve_api,
 │                               #   evaluate_ragas, compare_configs, benchmark_rag,
 │                               #   load_test, langfuse_report, report, run_tests, list_models
 ├── data/
-│   ├── raw/sources/            # примеры входных документов
-│   └── qa/golden_qa.jsonl      # примеры тестовых запросов/эталонов
-├── examples/                   # примеры HTTP-запросов
-├── tests/                      # pytest: ядро + llmops
-└── results/                    # артефакты: ragas, perf, load, langfuse, REPORT.md
+│   ├── raw/sources/            # your documents (private, not published)
+│   └── qa/golden_qa.jsonl      # sample test questions/ground truths
+├── examples/                   # example HTTP requests
+├── tests/                      # pytest: core + llmops
+└── results/                    # artifacts: ragas, perf, load, langfuse, REPORT.md
 ```
 
 ---
 
-## 16. Конфигурация
+## 16. Configuration
 
-Все настройки — через `.env` (шаблон: [`.env.example`](.env.example)); секреты в
-git не попадают. Профили `configs/{hw,llms,embeddings}` выбираются переменными
-`HW_PROFILE` / `LLM_PROFILE` / `EMBEDDING_PROFILE`.
+All settings go through `.env` (template: [`.env.example`](.env.example));
+secrets never land in git. The `configs/{hw,llms,embeddings}` profiles are
+selected by `HW_PROFILE` / `LLM_PROFILE` / `EMBEDDING_PROFILE`.
 
-Ключевые группы: Qdrant, корпус (`SOURCES_DIR`), провайдер LLM
-(`LLM_PROVIDER/LLM_BASE_URL/…`, GigaChat), эмбеддинги, реранкер, чанкинг,
-парсер, Langfuse, Docker (`MODELS_DIR`, `MODEL_FILE`, `APP_PORT`), пороги RAGAS.
+Key groups: Qdrant, corpus (`SOURCES_DIR`), LLM provider
+(`LLM_PROVIDER/LLM_BASE_URL/…`, GigaChat), embeddings, reranker, chunking,
+parser, Langfuse, Docker (`MODELS_DIR`, `MODEL_FILE`, `APP_PORT`), RAGAS
+thresholds.
 
 ---
 
-## 17. Решение проблем
+## 17. Troubleshooting
 
-| Симптом | Причина / решение |
+| Symptom | Cause / fix |
 |---|---|
-| `GGUF не найден` | пусто в `MODELS_DIR`; задайте `MODEL_FILE=/models/<файл>.gguf` |
-| `app` не видит LLM | не поднят llama-профиль (`ai395`/`rtx3060`/`cpu`); проверьте `docker compose ps` |
-| Нет GPU в контейнере | для Vulkan/ROCm — `group_add: video,render` и устройства `/dev/dri`,`/dev/kfd`; для CUDA — nvidia-container-toolkit |
-| Langfuse пуст | `LANGFUSE_ENABLED=1`, `LANGFUSE_HOST=http://langfuse-web:3000`, ключи совпадают с `LANGFUSE_INIT_*` |
-| RAGAS низкий recall | увеличьте `TOP_K`/`RETRIEVE_CANDIDATES`, включите реранкер, проверьте чанкинг |
-| Медленная генерация | вынесите больше слоёв на GPU (`N_GPU_LAYERS`), уменьшите `N_CTX`, поднимите `N_PARALLEL` |
+| `GGUF not found` | `MODELS_DIR` is empty; set `MODEL_FILE=/models/<file>.gguf` |
+| `app` cannot see the LLM | the llama profile is not up (`ai395`/`rtx3060`/`cpu`); check `docker compose ps` |
+| No GPU inside the container | for Vulkan/ROCm — `group_add: video,render` and `/dev/dri`,`/dev/kfd`; for CUDA — nvidia-container-toolkit |
+| Langfuse is empty | `LANGFUSE_ENABLED=1`, `LANGFUSE_HOST=http://langfuse-web:3000`, keys match `LANGFUSE_INIT_*` |
+| Low RAGAS recall | increase `TOP_K`/`RETRIEVE_CANDIDATES`, enable the reranker, review chunking |
+| Slow generation | offload more layers to the GPU (`N_GPU_LAYERS`), reduce `N_CTX`, raise `N_PARALLEL` |
 
 ---
 
-## 18. Ограничения и допущения
+## 18. Limitations and assumptions
 
-- **Железо разработки** — AMD Ryzen 7 7840HS + Radeon 780M (CPU-инференс).
-  Профили `ai395` (Vulkan) и `rtx3060` (CUDA) поставляются как конфигурации и
-  собираются на целевом железе; фактические замеры в отчёте сделаны на доступном
-  железе.
-- **Avito A-vibe** — закрытые веса → представлена как OpenAI-совместимый
-  эндпоинт-профиль.
-- **Наименьшие открытые веса GigaChat** — MoE 10B/1.8B и 20B/3B (не строго
-  5–8B); в каталоге это отражено.
-- **Langfuse на dev-машине.** Полный self-hosted стек Langfuse (Postgres +
-  ClickHouse + Redis + MinIO + web + worker) описан в `docker-compose.yml`
-  (профиль `monitoring`) и рассчитан на целевые боксы (AI MAX+ 395, 128 ГБ).
-  На слабой dev-машине он не поднимался (недостаток RAM); трейсы для отчёта
-  собраны через встроенный JSONL-сток (`TRACE_JSONL`), формат совпадает с
+- **Dev hardware** — AMD Ryzen 7 7840HS + Radeon 780M (CPU inference). The
+  `ai395` (Vulkan) and `rtx3060` (CUDA) profiles ship as configurations and are
+  built on the target hardware; the actual measurements in the report were taken
+  on the available hardware.
+- **Avito A-vibe** — closed weights → represented as an OpenAI-compatible
+  endpoint profile.
+- **Smallest open GigaChat weights** — MoE 10B/1.8B and 20B/3B (not strictly
+  5–8B); the catalog reflects this.
+- **Langfuse on the dev machine.** The full self-hosted Langfuse stack (Postgres
+  + ClickHouse + Redis + MinIO + web + worker) is described in
+  `docker-compose.yml` (the `monitoring` profile) and targets the production
+  boxes (AI MAX+ 395, 128 GB). It was not started on the weak dev machine
+  (insufficient RAM); the traces for the report were collected through the
+  built-in JSONL sink (`TRACE_JSONL`), whose format matches
   `scripts/langfuse_report.py`.
-- Сканы распознаются OCR (tesseract); качество зависит от исходника.
-
----
-
-<details>
-<summary><b>English TL;DR</b></summary>
-
-A private RAG assistant over Russian normative documents (GOSTs, FSTEC acts,
-EAT regulations). Answers with **verifiable citations** to exact chunks, fully
-offline via **llama.cpp** (Vulkan for AMD Ryzen AI MAX+ 395, CUDA for RTX 3060,
-ROCm, or CPU). Ships as a **docker-compose** stack (Qdrant + llama.cpp + FastAPI
-+ self-hosted **Langfuse**). Includes **RAGAS** evaluation with a quality gate,
-**load testing with graphs**, unit tests, and a **GitHub Actions CI/CD** that
-builds images and (on a self-hosted runner) runs RAGAS + load tests.
-See sections above for commands.
-
-</details>
+- **Document corpus** — the corpus is the user's own and is not published in the
+  repository; bring your own documents in `data/raw/sources/`.
+- Scans are recognized with OCR (tesseract); quality depends on the source.

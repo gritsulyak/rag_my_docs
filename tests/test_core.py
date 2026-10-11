@@ -86,18 +86,17 @@ class TestChunking:
 
 
 class TestPdfParsing:
-    def test_reglament_cover_page_number(self):
-        entry = _manifest_by_label("Регламент ЕАТ (редакция №19)")
+    def test_first_page_number(self):
+        entry = _manifest_by_label("ГОСТ Р 57100—2016")
         pages = parse_pdf(
             PDF_DIR / entry["path"],
             label=entry["label"],
             title=entry.get("title", ""),
-            kind="regulation",
+            kind="standard",
         )
-        cover = next(p for p in pages if "УТВЕРЖДЕНО" in p.text)
-        # Раньше в номер страницы попадал год «2025» из колонтитула.
-        assert cover.page == 1
-        assert cover.physical_page == 1
+        # Первая страница документа всегда печатная страница 1.
+        assert pages[0].page == 1
+        assert pages[0].physical_page == 1
 
     def test_page_numbers_within_document(self):
         for entry in load_manifest()["files"]:
@@ -111,19 +110,29 @@ class TestPdfParsing:
                 assert page.page is not None
                 assert 1 <= page.page <= entry["pages"]
 
-    def test_scanned_letter_uses_ocr(self):
-        entry = _manifest_by_label("Письмо Казначейства от 27.02.2019 №07-04-05/14-1374")
-        path = PDF_DIR / entry["path"]
-        pages = parse_pdf(
-            path, label=entry["label"], title="", kind="law", ocr_pages=load_ocr(path)
+    def test_load_ocr_reads_sidecar(self, tmp_path, monkeypatch):
+        import normdoc.parsing as parsing
+
+        monkeypatch.setattr(parsing, "OCR_DIR", tmp_path)
+        pdf = tmp_path / "scan.pdf"
+        pdf.write_bytes(b"%PDF-1.4")
+        (tmp_path / "scan.json").write_text(
+            json.dumps({"pages": [{"physical": 1, "text": "РАСПОЗНАННЫЙ ТЕКСТ"}]},
+                       ensure_ascii=False),
+            encoding="utf-8",
         )
-        assert pages
-        assert "КАЗНАЧЕЙСТВО" in pages[0].text.upper()
+        assert load_ocr(pdf) == {1: "РАСПОЗНАННЫЙ ТЕКСТ"}
+
+    def test_load_ocr_missing_sidecar(self, tmp_path, monkeypatch):
+        import normdoc.parsing as parsing
+
+        monkeypatch.setattr(parsing, "OCR_DIR", tmp_path)
+        assert load_ocr(tmp_path / "absent.pdf") == {}
 
     def test_tables_serialized(self):
-        entry = _manifest_by_label("Регламент ЕАТ (редакция №19)")
+        entry = _manifest_by_label("ГОСТ Р 57100—2025")
         pages = parse_pdf(
-            PDF_DIR / entry["path"], label=entry["label"], title="", kind="regulation"
+            PDF_DIR / entry["path"], label=entry["label"], title="", kind="standard"
         )
         assert any("[Таблица]" in p.text for p in pages)
 

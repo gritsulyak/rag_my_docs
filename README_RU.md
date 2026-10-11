@@ -1,13 +1,14 @@
 # normdoc-assistant
 
-Приватный **RAG-ассистент по нормативным документам** (ГОСТы, акты ФСТЭК России,
-регламенты и обновления ЕАТ, письма Казначейства). Отвечает на вопросы по
-локальному корпусу документов **со ссылками на источники**, работает
-**полностью офлайн** на своём `llama.cpp` (Vulkan/CUDA/ROCm/CPU) и
-поставляется как **docker-compose**-стек с самохостящимся **Langfuse**.
+Приватный **RAG-ассистент по нормативным документам пользователя**
+(национальные стандарты, регламенты, приказы, методические указания). Отвечает
+на вопросы по **локальному корпусу документов со ссылками на источники**,
+работает **полностью офлайн** на своём `llama.cpp` (Vulkan/CUDA/ROCm/CPU) и
+поставляется как **docker-compose**-стек с самохостящимся **Langfuse** для
+трейсинга.
 
-> Полная русская документация (этот файл — её копия; основной README — на русском,
-> в конце — краткая English-выжимка).
+> English version — in [`README.md`](README.md). Этот файл — русская
+> документация.
 
 ---
 
@@ -36,10 +37,15 @@
 
 ## 1. Зачем это нужно
 
-**Бизнес-задача.** Инженерам и специалистам по закупкам нужно быстро получать
-точные ответы по нормативке (ФСТЭК №118/№240, распоряжение №824-р, ГОСТы,
-регламенты ЕАТ), не поднимая облачные LLM и не выгружая закрытые документы
-наружу. Ответ должен быть **проверяемым**: с указанием документа и страницы.
+**Задача.** Специалистам, работающим с нормативными документами (стандарты,
+приказы, регламенты, методические указания), нужно быстро получать точные
+ответы по базе документов, **не отправляя внутренние или закрытые документы в
+облачную LLM**. Ответ должен быть **проверяемым**: с указанием документа и
+страницы.
+
+Ассистент **не привязан к конкретной предметной области** — он работает с
+*вашим* корпусом документов. Направьте его на свои документы, и он будет
+отвечать строго по ним.
 
 **Что делает система:**
 
@@ -107,7 +113,7 @@ docker compose --profile tools run --rm app python scripts/build_index.py --rese
 # 5) Проверьте
 curl -s localhost:8000/health
 curl -s localhost:8000/answer -H 'Content-Type: application/json' \
-     -d '{"question":"Сколько классов защиты устанавливается Требованиями ФСТЭК №118?"}' | jq
+     -d '{"question":"Что такое описание архитектуры?"}' | jq
 
 # 6) Откройте Langfuse (трейсы) — http://localhost:3000
 #    API — http://localhost:8000/docs
@@ -213,14 +219,14 @@ GIGACHAT_VERIFY_SSL=1     # нужен корневой сертификат М�
 
 ## 7. Корпус и индекс
 
-**Примеры входных данных** уже в репозитории:
+**Примеры входных данных.** Корпус документов **приватный и не публикуется** в
+репозитории: положите свои документы в `data/raw/sources/` (PDF/RTF/ODT; сканы
+распознаются OCR). В репозитории есть примеры *вопросов* и HTTP-запросов:
 
-- документы: [`data/raw/sources/`](data/raw/sources/) (ГОСТ Р 57100—2025,
-  ГОСТ Р 58412—2019, ФСТЭК №118/№240, распоряжение №824-р, письмо
-  Казначейства, регламент ЕАТ, обновление ЕАТ и др.);
-- вопросы: [`data/qa/golden_qa.jsonl`](data/qa/golden_qa.jsonl) (12 пар
-  «вопрос → эталонный ответ»);
-- HTTP-примеры: [`examples/requests.http`](examples/requests.http).
+- вопросы: [`data/qa/golden_qa.jsonl`](data/qa/golden_qa.jsonl) — 12 пар
+  «вопрос → эталонный ответ» (на русском, по документам примерного корпуса);
+- HTTP-примеры: [`examples/requests.http`](examples/requests.http),
+  [`examples/README.md`](examples/README.md).
 
 ```bash
 # конвертация (RTF/ODT→PDF), OCR сканов, чистка, manifest
@@ -251,7 +257,7 @@ uv run python scripts/build_index.py --reset --collection normdoc_e5_small
 
 ```bash
 curl -s localhost:8000/answer -H 'Content-Type: application/json' -d '{
-  "question": "В какой срок получатель средств формирует сведения о бюджетном обязательстве?",
+  "question": "Каким приказом утверждён ГОСТ Р 57100—2025?",
   "top_k": 5
 }' | jq
 ```
@@ -260,8 +266,8 @@ curl -s localhost:8000/answer -H 'Content-Type: application/json' -d '{
 
 ```json
 {
-  "answer": "Не позднее трёх рабочих дней со дня заключения контракта [1].",
-  "sources": [{"source": "Письмо Казначейства…", "page": 2, "score": 0.83, "snippet": "…"}],
+  "answer": "Стандарт утверждён приказом Росстандарта от 25.03.2025 N 215-ст и введён в действие с 30 июня 2025 года [ГОСТ Р 57100—2025, стр. 27].",
+  "sources": [{"source": "ГОСТ Р 57100—2025", "page": 27, "score": 0.83, "snippet": "…"}],
   "latency_s": 14.2, "retrieval_s": 0.4, "generation_s": 13.8,
   "usage": {"prompt_tokens": 1200, "completion_tokens": 64, "total_tokens": 1264},
   "dropped_citations": [], "collection": "normdoc_e5_small", "model": "meno"
@@ -409,8 +415,8 @@ perf-таблицу, нагрузочные тесты с графиками, т
 │                               #   evaluate_ragas, compare_configs, benchmark_rag,
 │                               #   load_test, langfuse_report, report, run_tests, list_models
 ├── data/
-│   ├── raw/sources/            # примеры входных документов
-│   └── qa/golden_qa.jsonl      # примеры тестовых запросов/эталонов
+│   ├── raw/sources/            # ваши документы (приватные, не публикуются)
+│   └── qa/golden_qa.jsonl      # примеры тестовых вопросов/эталонов
 ├── examples/                   # примеры HTTP-запросов
 ├── tests/                      # pytest: ядро + llmops
 └── results/                    # артефакты: ragas, perf, load, langfuse, REPORT.md
@@ -459,20 +465,6 @@ git не попадают. Профили `configs/{hw,llms,embeddings}` выб�
   На слабой dev-машине он не поднимался (недостаток RAM); трейсы для отчёта
   собраны через встроенный JSONL-сток (`TRACE_JSONL`), формат совпадает с
   `scripts/langfuse_report.py`.
+- **Корпус документов** — корпус принадлежит пользователю и не публикуется в
+  репозитории; положите свои документы в `data/raw/sources/`.
 - Сканы распознаются OCR (tesseract); качество зависит от исходника.
-
----
-
-<details>
-<summary><b>English TL;DR</b></summary>
-
-A private RAG assistant over Russian normative documents (GOSTs, FSTEC acts,
-EAT regulations). Answers with **verifiable citations** to exact chunks, fully
-offline via **llama.cpp** (Vulkan for AMD Ryzen AI MAX+ 395, CUDA for RTX 3060,
-ROCm, or CPU). Ships as a **docker-compose** stack (Qdrant + llama.cpp + FastAPI
-+ self-hosted **Langfuse**). Includes **RAGAS** evaluation with a quality gate,
-**load testing with graphs**, unit tests, and a **GitHub Actions CI/CD** that
-builds images and (on a self-hosted runner) runs RAGAS + load tests.
-See sections above for commands.
-
-</details>

@@ -101,7 +101,7 @@ class AnswerResponse(BaseModel):
 
 app = FastAPI(
     title="normdoc-assistant",
-    description="Приватный RAG-ассистент по нормативным документам (ГОСТ, ФСТЭК, ЕАТ).",
+    description="Приватный RAG-ассистент по нормативным документам пользователя со ссылками на источники.",
     version="0.3.0",
 )
 

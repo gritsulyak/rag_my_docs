@@ -1,7 +1,7 @@
 [project]
 name = "normdoc-assistant"
 version = "0.2.0"
-description = "Приватный RAG-ассистент по нормативным документам: ГОСТы, акты ФСТЭК, регламенты ЕАТ. LlamaIndex + Qdrant + llama.cpp (bonsai) + Langfuse"
+description = "Приватный RAG-ассистент по нормативным документам пользователя: локальный корпус, ответы со ссылками на источники. LlamaIndex + Qdrant + llama.cpp (Vulkan/CUDA/ROCm) + Langfuse"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
