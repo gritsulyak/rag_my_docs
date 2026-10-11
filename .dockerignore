@@ -3,6 +3,7 @@
 .venv/
 # Приватная документация — не попадает в build-контекст и образ
 docs/
+DEMO.md
 __pycache__/
 *.py[cod]
 .pytest_cache/
