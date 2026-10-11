@@ -2,6 +2,10 @@
 
 Не требуют эмбеддингов/Qdrant/LLM — работают на подготовленных PDF из
 data/raw/pdf (см. scripts/prepare_docs.py). Запуск: uv run python scripts/run_tests.py
+
+Приватный корпус не публикуется в git, поэтому тесты, которым нужны реальные
+документы (``data/raw/manifest.json`` + PDF), при его отсутствии ПРОПУСКАЮТСЯ
+(``@requires_corpus``), а не падают — так CI проходит на чистом клоне.
 """
 
 from __future__ import annotations
@@ -12,7 +16,7 @@ from pathlib import Path
 import pytest
 from llama_index.core.schema import NodeWithScore, TextNode
 
-from normdoc.config import PDF_DIR
+from normdoc.config import MANIFEST_PATH, PDF_DIR
 from normdoc.parsing import (
     load_all_chunks,
     load_manifest,
@@ -30,6 +34,14 @@ from normdoc.prompts import (
 
 ROOT = Path(__file__).resolve().parents[1]
 CHUNKS_JSON = ROOT / "data" / "chunks" / "chunks.json"
+
+# Приватный корпус (PDF + manifest.json) не публикуется в git. Тесты, которым
+# нужны реальные документы, на чистом клоне (CI) пропускаются, а не падают.
+CORPUS_AVAILABLE = MANIFEST_PATH.exists()
+requires_corpus = pytest.mark.skipif(
+    not CORPUS_AVAILABLE,
+    reason="приватный корпус не подготовлен (нет data/raw/manifest.json)",
+)
 
 
 def _manifest_by_label(label: str) -> dict:
@@ -73,6 +85,7 @@ class TestChunking:
         joined_ok = any(parts[i][-10:] in parts[i + 1] or parts[i + 1][:10] in parts[i] for i in range(len(parts) - 1))
         assert joined_ok
 
+    @requires_corpus
     def test_load_all_chunks_metadata(self):
         chunks = load_all_chunks(chunk_size=400, chunk_overlap=50)
         assert chunks
@@ -86,6 +99,7 @@ class TestChunking:
 
 
 class TestPdfParsing:
+    @requires_corpus
     def test_first_page_number(self):
         entry = _manifest_by_label("ГОСТ Р 57100—2016")
         pages = parse_pdf(
@@ -98,6 +112,7 @@ class TestPdfParsing:
         assert pages[0].page == 1
         assert pages[0].physical_page == 1
 
+    @requires_corpus
     def test_page_numbers_within_document(self):
         for entry in load_manifest()["files"]:
             pages = parse_pdf(
@@ -129,6 +144,7 @@ class TestPdfParsing:
         monkeypatch.setattr(parsing, "OCR_DIR", tmp_path)
         assert load_ocr(tmp_path / "absent.pdf") == {}
 
+    @requires_corpus
     def test_tables_serialized(self):
         entry = _manifest_by_label("ГОСТ Р 57100—2025")
         pages = parse_pdf(
@@ -136,6 +152,7 @@ class TestPdfParsing:
         )
         assert any("[Таблица]" in p.text for p in pages)
 
+    @requires_corpus
     def test_figure_captions_detected(self):
         entry = _manifest_by_label("ГОСТ Р 57100—2025")
         pages = parse_pdf(
