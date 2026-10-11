@@ -18,7 +18,9 @@ models/
 *.gguf
 data/raw/pdf/_conv/
 data/chunks/
+# Приватный корпус документов — не попадает в build-контекст/образ
 data/raw/sources/
+data/raw/manifest.json
 results/*.json
 results/*.md
 results/*.png

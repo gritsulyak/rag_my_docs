@@ -8,10 +8,13 @@ __pycache__/
 
 # Данные и результаты (генерируются)
 data/chunks/
-# Промежуточные конвертации/OCR (генерируются scripts/prepare_docs.py);
-# в репозитории остаются только исходники в data/raw/sources/.
+# Промежуточные конвертации/OCR (генерируются scripts/prepare_docs.py).
 data/raw/pdf/
 data/raw/ocr/
+# Приватный корпус документов (PDF/RTF/ODT) — не публикуется в git.
+# Файлы лежат локально и нужны пайплайну, но в репозиторий не попадают.
+data/raw/sources/
+data/raw/manifest.json
 results/*.json
 results/*.jsonl
 results/*.md
