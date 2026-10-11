@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Данные и результаты (генерируются)
+data/chunks/
+# Промежуточные конвертации/OCR (генерируются scripts/prepare_docs.py);
+# в репозитории остаются только исходники в data/raw/sources/.
+data/raw/pdf/
+data/raw/ocr/
+results/*.json
+results/*.md
+!results/.gitkeep
+# Отчёт — часть сдаваемого результата, его держим в репозитории.
+!results/REPORT.md
+
+# Локальные конфиги и секреты
+.env
+configs/hw/*.local.env
+configs/llms/*.local.env
+
+# Образы/контекст docker (тяжёлые бинарники кладутся на хост, не в git)
+docker/llamacpp/vendor/
+models/
+*.gguf
+
+# IDE
+.idea/
+.vscode/

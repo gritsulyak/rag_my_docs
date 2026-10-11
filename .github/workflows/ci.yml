@@ -1,0 +1,124 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository }}
+
+jobs:
+  # ------------------------------------------------------------------ тесты
+  tests:
+    name: Unit-тесты и линт
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Установка зависимостей
+        run: uv sync --no-dev --extra perf
+      - name: Линт (ruff, не блокирующий)
+        run: |
+          uvx ruff check src scripts tests || true
+      - name: Unit-тесты
+        run: uv run python scripts/run_tests.py
+      - name: Артефакт — отчёт pytest
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-report
+          path: results/pytest.txt
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------- сборка Docker-образов
+  docker:
+    name: Сборка образов (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: app
+            dockerfile: docker/app/Dockerfile
+            build-args: ""
+          - image: llama-cpu
+            dockerfile: docker/llama/Dockerfile
+            build-args: |
+              BACKEND=cpu
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Логин в GHCR (только push)
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Метаданные образа
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.image }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable={{is_default_branch}}
+      - name: Сборка и публикация
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          build-args: ${{ matrix.build-args }}
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ------------------------------------------------ качество RAG (self-hosted)
+  # Требует self-hosted runner с GPU/CPU, llama.cpp и моделью GGUF:
+  #   runs-on: [self-hosted, linux]  +  profile ai395/rtx3060/cpu.
+  # Запускается вручную (workflow_dispatch) или по метке "ragas".
+  ragas-load:
+    name: RAGAS + нагрузочный тест (self-hosted)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, linux]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Поднять стек (CPU-профиль как универсальный фолбэк)
+        run: |
+          docker compose --profile cpu up -d --build qdrant llama-cpu app
+      - name: Подготовка индекса
+        run: |
+          docker compose --profile tools run --rm app python scripts/prepare_docs.py
+          docker compose --profile tools run --rm app python scripts/build_index.py --reset --collection "${QDRANT_COLLECTION:-normdoc_e5_small}"
+      - name: RAGAS quality gate
+        run: docker compose --profile tools run --rm app python scripts/evaluate_ragas.py --limit 6 --gate
+      - name: Нагрузочный тест
+        run: docker compose --profile tools run --rm app python scripts/load_test.py --url http://app:8000 --requests 20 --concurrency 2 --name ci
+      - name: Итоговый отчёт
+        run: docker compose --profile tools run --rm app python scripts/report.py
+      - name: Артефакты оценки
+        uses: actions/upload-artifact@v4
+        with:
+          name: rag-evaluation
+          path: |
+            results/comparison_ragas.json
+            results/load_*.json
+            results/load_*.png
+            results/REPORT.md
+          if-no-files-found: warn
+      - name: Остановить стек
+        if: always()
+        run: docker compose --profile cpu --profile tools down

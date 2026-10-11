@@ -1,0 +1,25 @@
+# Не тащим в build-контекст тяжёлое и секретное.
+.git/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.idea/
+.vscode/
+.env
+.env.*
+!.env.example
+
+# Модели и данные
+models/
+*.gguf
+data/raw/pdf/_conv/
+data/chunks/
+data/raw/sources/
+results/*.json
+results/*.md
+results/*.png
+
+# Локальные вендорные сборки llama.cpp
+docker/llamacpp/vendor/

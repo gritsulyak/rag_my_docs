@@ -1,0 +1,367 @@
+# docker-compose для normdoc-assistant: Qdrant + llama.cpp (GPU-профили) + API + Langfuse.
+#
+# Профили (выбор железа/сервисов):
+#   ai395   — AMD Ryzen AI MAX+ 395 / Radeon 8060S: llama.cpp с Vulkan;
+#   rtx3060 — NVIDIA RTX 3060 (отдельный «карточный» бокс): llama.cpp с CUDA;
+#   rocm    — AMD через ROCm/HIP (альтернатива Vulkan);
+#   cpu     — без ускорения (любая машина);
+#   monitoring — self-hosted Langfuse (трейсы + latency);
+#   tools   — разовые задачи (индексация, RAGAS, load-тесты).
+#
+# Примеры:
+#   docker compose --profile ai395 --profile monitoring up -d --build
+#   docker compose --profile rtx3060 up -d
+#   docker compose --profile cpu --profile tools run --rm app python scripts/load_test.py --url http://app:8000
+#
+# Модели: положите GGUF в ./models (или в том, указанный MODELS_DIR). Имя файла
+# задаётся переменной MODEL_FILE (по умолчанию первый *.gguf в каталоге).
+
+name: normdoc
+
+x-llama-common: &llama-common
+  restart: unless-stopped
+  volumes:
+    - ${MODELS_DIR:-./models}:/models:ro
+  environment:
+    PORT: "8080"
+    MODEL_FILE: ${MODEL_FILE:-}
+    MODEL_ALIAS: ${MODEL_ALIAS:-local}
+    N_CTX: ${N_CTX:-32768}
+    N_GPU_LAYERS: ${N_GPU_LAYERS:-99}
+    N_PARALLEL: ${N_PARALLEL:-4}
+    THREADS: ${THREADS:-8}
+    LLAMA_EXTRA_ARGS: ${LLAMA_EXTRA_ARGS:-}
+  networks:
+    default:
+      aliases: [llama]
+  healthcheck:
+    test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8080/health >/dev/null || exit 1"]
+    interval: 20s
+    timeout: 5s
+    retries: 10
+    start_period: 40s
+
+x-app-common: &app-common
+  build:
+    context: .
+    dockerfile: docker/app/Dockerfile
+  restart: unless-stopped
+  environment:
+    QDRANT_URL: http://qdrant:6333
+    QDRANT_COLLECTION: ${QDRANT_COLLECTION:-normdoc_e5_small}
+    LLM_BASE_URL: http://llama:8080/v1
+    LLM_MODEL: ${MODEL_ALIAS:-local}
+    LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+    EMBEDDING_MODEL: ${EMBEDDING_MODEL:-intfloat/multilingual-e5-small}
+    EMBEDDING_DEVICE: ${EMBEDDING_DEVICE:-cpu}
+    EMBEDDING_PROFILE: ${EMBEDDING_PROFILE:-e5_small}
+    RERANK_ENABLED: ${RERANK_ENABLED:-1}
+    RERANK_DEVICE: ${RERANK_DEVICE:-cpu}
+    TOP_K: ${TOP_K:-5}
+    LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-1536}
+    HF_HOME: /root/.cache/huggingface
+    LANGFUSE_ENABLED: ${LANGFUSE_ENABLED:-0}
+    LANGFUSE_HOST: ${LANGFUSE_HOST:-http://langfuse-web:3000}
+    LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+    LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+  volumes:
+    - ./data:/app/data
+    - ./results:/app/results
+    - hf_cache:/root/.cache/huggingface
+  depends_on:
+    qdrant:
+      condition: service_started
+
+services:
+  # --------------------------------------------------------------------- Qdrant
+  qdrant:
+    image: qdrant/qdrant:v1.13.3
+    restart: unless-stopped
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      QDRANT__SERVICE__GRPC_PORT: "6334"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # --------------------------------------------------- llama.cpp: AI MAX+ 395 (Vulkan)
+  llama-vulkan:
+    <<: *llama-common
+    profiles: ["ai395", "vulkan"]
+    build:
+      context: .
+      dockerfile: docker/llama/Dockerfile
+      args:
+        BACKEND: vulkan
+    image: normdoc-llama:vulkan
+    devices:
+      - /dev/dri:/dev/dri
+      - /dev/kfd:/dev/kfd
+    group_add:
+      - video
+      - render
+
+  # ------------------------------------------------------- llama.cpp: RTX 3060 (CUDA)
+  llama-cuda:
+    <<: *llama-common
+    profiles: ["rtx3060", "cuda"]
+    build:
+      context: .
+      dockerfile: docker/llama/Dockerfile
+      args:
+        BACKEND: cuda
+        BASE_IMAGE: nvidia/cuda:12.4.1-devel-ubuntu22.04
+        RUNTIME_BASE_IMAGE: nvidia/cuda:12.4.1-runtime-ubuntu22.04
+        CUDA_ARCHITECTURES: "86"
+    image: normdoc-llama:cuda
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # ---------------------------------------------------------------- llama.cpp: ROCm
+  llama-rocm:
+    <<: *llama-common
+    profiles: ["rocm"]
+    build:
+      context: .
+      dockerfile: docker/llama/Dockerfile
+      args:
+        BACKEND: rocm
+        BASE_IMAGE: rocm/dev-ubuntu-22.04:6.2-complete
+        RUNTIME_BASE_IMAGE: rocm/dev-ubuntu-22.04:6.2
+        AMDGPU_TARGETS: ${AMDGPU_TARGETS:-gfx1151}
+    image: normdoc-llama:rocm
+    devices:
+      - /dev/dri:/dev/dri
+      - /dev/kfd:/dev/kfd
+    group_add:
+      - video
+      - render
+    security_opt:
+      - seccomp:unconfined
+
+  # ------------------------------------------------------------- llama.cpp: CPU
+  llama-cpu:
+    <<: *llama-common
+    profiles: ["cpu"]
+    build:
+      context: .
+      dockerfile: docker/llama/Dockerfile
+      args:
+        BACKEND: cpu
+    image: normdoc-llama:cpu
+    environment:
+      N_GPU_LAYERS: "0"
+
+  # ------------------------------------------------------------------ RAG API
+  app:
+    <<: *app-common
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8000/health >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # Разовые задачи: индексация, RAGAS, нагрузочные тесты (тот же образ, другой command).
+  tools:
+    <<: *app-common
+    profiles: ["tools"]
+    depends_on:
+      qdrant:
+        condition: service_started
+    command: ["python", "scripts/list_models.py"]
+
+  # ================================================================= Langfuse
+  langfuse-postgres:
+    image: postgres:17
+    profiles: ["monitoring"]
+    environment:
+      POSTGRES_USER: ${LANGFUSE_POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${LANGFUSE_POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${LANGFUSE_POSTGRES_DB:-postgres}
+      TZ: UTC
+      PGTZ: UTC
+    volumes:
+      - langfuse_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${LANGFUSE_POSTGRES_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  langfuse-clickhouse:
+    image: clickhouse/clickhouse-server:24.3
+    profiles: ["monitoring"]
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: ${LANGFUSE_CLICKHOUSE_USER:-clickhouse}
+      CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD:-clickhouse}
+    volumes:
+      - langfuse_clickhouse_data:/var/lib/clickhouse
+      - langfuse_clickhouse_logs:/var/log/clickhouse-server
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:8123/ping || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
+  langfuse-redis:
+    image: redis:7
+    profiles: ["monitoring"]
+    command: ["redis-server", "--requirepass", "${LANGFUSE_REDIS_AUTH:-langfuse-redis-password}", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - langfuse_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${LANGFUSE_REDIS_AUTH:-langfuse-redis-password}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
+  langfuse-minio:
+    image: minio/minio:latest
+    profiles: ["monitoring"]
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${LANGFUSE_MINIO_ROOT_USER:-minio}
+      MINIO_ROOT_PASSWORD: ${LANGFUSE_MINIO_ROOT_PASSWORD:-miniosecret}
+    ports:
+      - "9090:9000"
+      - "9091:9001"
+    volumes:
+      - langfuse_minio_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  langfuse-minio-init:
+    image: minio/mc:latest
+    profiles: ["monitoring"]
+    depends_on:
+      langfuse-minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-lc"]
+    command: ["mc alias set local http://langfuse-minio:9000 ${LANGFUSE_MINIO_ROOT_USER:-minio} ${LANGFUSE_MINIO_ROOT_PASSWORD:-miniosecret} && mc mb --ignore-existing local/${LANGFUSE_S3_BUCKET:-langfuse}"]
+    restart: "no"
+
+  langfuse-web:
+    image: docker.io/langfuse/langfuse:3
+    profiles: ["monitoring"]
+    depends_on:
+      langfuse-postgres:
+        condition: service_healthy
+      langfuse-clickhouse:
+        condition: service_healthy
+      langfuse-redis:
+        condition: service_healthy
+      langfuse-minio:
+        condition: service_healthy
+      langfuse-minio-init:
+        condition: service_completed_successfully
+    environment: &langfuse-env
+      NEXTAUTH_URL: ${LANGFUSE_NEXTAUTH_URL:-http://localhost:3000}
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-langfuse-local-nextauth-secret-change-me}
+      SALT: ${LANGFUSE_SALT:-langfuse-local-salt-change-me}
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+      DATABASE_URL: postgresql://${LANGFUSE_POSTGRES_USER:-postgres}:${LANGFUSE_POSTGRES_PASSWORD:-postgres}@langfuse-postgres:5432/${LANGFUSE_POSTGRES_DB:-postgres}
+      CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse-clickhouse:9000
+      CLICKHOUSE_URL: http://langfuse-clickhouse:8123
+      CLICKHOUSE_USER: ${LANGFUSE_CLICKHOUSE_USER:-clickhouse}
+      CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD:-clickhouse}
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      REDIS_HOST: langfuse-redis
+      REDIS_PORT: "6379"
+      REDIS_AUTH: ${LANGFUSE_REDIS_AUTH:-langfuse-redis-password}
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: ${LANGFUSE_S3_BUCKET:-langfuse}
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: us-east-1
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${LANGFUSE_MINIO_ROOT_USER:-minio}
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_ROOT_PASSWORD:-miniosecret}
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: ${LANGFUSE_S3_BUCKET:-langfuse}
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: us-east-1
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: ${LANGFUSE_MINIO_ROOT_USER:-minio}
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_ROOT_PASSWORD:-miniosecret}
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+      LANGFUSE_S3_BATCH_EXPORT_ENABLED: "false"
+      TELEMETRY_ENABLED: "false"
+      # Автосоздание организации/проекта/ключей (turnkey self-hosted).
+      LANGFUSE_INIT_ORG_ID: ${LANGFUSE_INIT_ORG_ID:-normdoc-org}
+      LANGFUSE_INIT_ORG_NAME: ${LANGFUSE_INIT_ORG_NAME:-normdoc}
+      LANGFUSE_INIT_PROJECT_ID: ${LANGFUSE_INIT_PROJECT_ID:-normdoc}
+      LANGFUSE_INIT_PROJECT_NAME: ${LANGFUSE_INIT_PROJECT_NAME:-normdoc-assistant}
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-pk-lf-normdoc}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-sk-lf-normdoc}
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-admin@example.com}
+      LANGFUSE_INIT_USER_NAME: ${LANGFUSE_INIT_USER_NAME:-admin}
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:-password123}
+      HOSTNAME: 0.0.0.0
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:3000"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+    restart: unless-stopped
+
+  langfuse-worker:
+    image: docker.io/langfuse/langfuse-worker:3
+    profiles: ["monitoring"]
+    depends_on:
+      langfuse-postgres:
+        condition: service_healthy
+      langfuse-clickhouse:
+        condition: service_healthy
+      langfuse-redis:
+        condition: service_healthy
+      langfuse-minio:
+        condition: service_healthy
+      langfuse-minio-init:
+        condition: service_completed_successfully
+    environment:
+      <<: *langfuse-env
+      PORT: "3030"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:3030"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  qdrant_data:
+  hf_cache:
+  langfuse_postgres_data:
+  langfuse_clickhouse_data:
+  langfuse_clickhouse_logs:
+  langfuse_redis_data:
+  langfuse_minio_data:
