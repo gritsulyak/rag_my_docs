@@ -24,6 +24,9 @@ results/*.md
 configs/hw/*.local.env
 configs/llms/*.local.env
 
+# Приватная документация/материалы — не публикуются в git
+docs/
+
 # Образы/контекст docker (тяжёлые бинарники кладутся на хост, не в git)
 docker/llamacpp/vendor/
 models/
