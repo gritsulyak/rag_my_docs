@@ -65,18 +65,43 @@ class TraceHandle:
     def __init__(self, lf=None, query: str = "", name: str = "rag_answer") -> None:
         self._lf = lf
         self._root: SpanLike | None = None
+        self._root_cm = None
+        self._ctx_token = None
+        self._finished = False
         self._query = query
         self._name = name
         self._timers: dict[str, _Timer] = {}
         self._spans: dict[str, SpanLike] = {}
+        self._span_cms: dict[str, SpanLike] = {}
         self._local_spans: list[dict] = []
         self._active = _Timer(name)
         self._current: _Timer = self._active
         if lf is not None:
+            # Корневое наблюдение делаем «текущим» (start_as_current_observation):
+            # тогда Langfuse называет трейс ``rag_answer`` и группирует дочерние
+            # спаны в ОДНОМ трейсе.
+            #
+            # FastAPI сам создаёт OTel-спан ``fastapi.request`` и оставляет его
+            # «текущим» в контексте — если не отцепиться, наш корень вложится в
+            # него (в трейсе появляется «висячий» родитель, а имя трейса теряется).
+            # Поэтому сначала подкладываем пустой контекст, а в finish() вернём как было.
             try:
-                self._root = lf.start_observation(name=name, as_type="chain", input=query)
+                from opentelemetry import context as _otel_context
+
+                self._ctx_token = _otel_context.attach(_otel_context.Context())
+            except Exception:
+                self._ctx_token = None
+            try:
+                if hasattr(lf, "start_as_current_observation"):
+                    self._root_cm = lf.start_as_current_observation(
+                        name=name, as_type="chain", input=query
+                    )
+                    self._root = self._root_cm.__enter__()
+                else:  # pragma: no cover - очень старые SDK
+                    self._root = lf.start_observation(name=name, as_type="chain", input=query)
             except Exception:  # мониторинг не должен ломать RAG
                 self._root = None
+                self._root_cm = None
 
     def current_span(self, name: str) -> _Timer:
         """Открывает дочерний span и запускает таймер."""
@@ -86,15 +111,19 @@ class TraceHandle:
         if self._lf is not None and self._root is not None:
             try:
                 as_type = "retriever" if name == "retrieve" else "generation"
-                span = self._lf.start_observation(
-                    name=name,
-                    as_type=as_type,
-                    trace_context={
-                        "trace_id": self._root.trace_id,
-                        "parent_span_id": self._root.id,
-                    },
-                )
-                self._spans[name] = span
+                if hasattr(self._lf, "start_as_current_observation"):
+                    cm = self._lf.start_as_current_observation(name=name, as_type=as_type)
+                    self._span_cms[name] = cm
+                    self._spans[name] = cm.__enter__()
+                else:  # pragma: no cover
+                    self._spans[name] = self._lf.start_observation(
+                        name=name,
+                        as_type=as_type,
+                        trace_context={
+                            "trace_id": self._root.trace_id,
+                            "parent_span_id": self._root.id,
+                        },
+                    )
             except Exception:
                 pass
         return timer
@@ -134,9 +163,19 @@ class TraceHandle:
                 level="ERROR" if status == "ERROR" else None,
                 status_message=status if status not in (None, "OK") else None,
             )
-            span.end()
         except Exception:
             pass
+        cm = self._span_cms.pop(name, None)
+        if cm is not None:
+            try:
+                cm.__exit__(None, None, None)
+            except Exception:
+                pass
+        else:
+            try:
+                span.end()
+            except Exception:
+                pass
 
     def _write_local(self, output: str, metadata: dict | None, usage: dict | None, status: str | None) -> None:
         """Дописывает трейс в JSONL-файл (если задан TRACE_JSONL)."""
@@ -166,6 +205,9 @@ class TraceHandle:
         usage: dict | None = None,
         status: str | None = None,
     ) -> None:
+        if self._finished:
+            return
+        self._finished = True
         elapsed = self._active.elapsed()
         self._write_local(output, metadata, usage, status)
         if self._root is not None:
@@ -176,9 +218,26 @@ class TraceHandle:
                     usage_details=_usage_details(usage),
                     level="ERROR" if status == "ERROR" else None,
                 )
+            except Exception:
+                pass
+        if self._root_cm is not None:
+            try:
+                self._root_cm.__exit__(None, None, None)
+            except Exception:
+                pass
+        elif self._root is not None:
+            try:
                 self._root.end()
             except Exception:
                 pass
+        if self._ctx_token is not None:
+            try:
+                from opentelemetry import context as _otel_context
+
+                _otel_context.detach(self._ctx_token)
+            except Exception:
+                pass
+            self._ctx_token = None
         if self._lf is not None:
             try:
                 self._lf.flush()

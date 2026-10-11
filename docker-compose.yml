@@ -64,7 +64,9 @@ x-app-common: &app-common
     LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-1536}
     HF_HOME: /root/.cache/huggingface
     LANGFUSE_ENABLED: ${LANGFUSE_ENABLED:-0}
-    LANGFUSE_HOST: ${LANGFUSE_HOST:-http://langfuse-web:3000}
+    # Внутри compose app ходит в Langfuse по внутреннему DNS. LANGFUSE_HOST из
+    # .env — для запусков на хосте (localhost), поэтому сюда его подставлять нельзя.
+    LANGFUSE_HOST: ${LANGFUSE_INTERNAL_HOST:-http://langfuse-web:3000}
     LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
     LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
   volumes:
@@ -273,7 +275,9 @@ services:
     restart: unless-stopped
 
   langfuse-minio:
-    image: minio/minio:latest
+    # Официальный minio/minio:latest отдаёт «pull access denied» на Docker Hub,
+    # поэтому по умолчанию — совместимое зеркало pgsty (см. MINIO_IMAGE в .env).
+    image: ${MINIO_IMAGE:-pgsty/minio:latest}
     profiles: ["monitoring"]
     command: server /data --console-address ":9001"
     environment:
@@ -293,7 +297,8 @@ services:
     restart: unless-stopped
 
   langfuse-minio-init:
-    image: minio/mc:latest
+    # minio/mc:latest недоступен на Docker Hub — зеркало pgsty (см. MC_IMAGE в .env).
+    image: ${MC_IMAGE:-pgsty/mc:latest}
     profiles: ["monitoring"]
     depends_on:
       langfuse-minio:

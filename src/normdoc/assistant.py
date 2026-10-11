@@ -70,43 +70,49 @@ class NormDocAssistant:
         started = time.monotonic()
         handle = self.tracer.trace("rag_answer", query)
 
-        handle.current_span("retrieve")
-        nodes = self.retrieve(query)
-        retrieval_s = time.monotonic() - started
-        handle.record("retrieve", input=query, metadata={"top_k": len(nodes)})
+        try:
+            handle.current_span("retrieve")
+            nodes = self.retrieve(query)
+            retrieval_s = time.monotonic() - started
+            handle.record("retrieve", input=query, metadata={"top_k": len(nodes)})
 
-        context = format_context(nodes)
-        messages = [
-            ChatMessage(role=MessageRole.SYSTEM, content=SYSTEM_PROMPT),
-            ChatMessage(role=MessageRole.USER, content=user_message(context, query, nodes)),
-        ]
+            context = format_context(nodes)
+            messages = [
+                ChatMessage(role=MessageRole.SYSTEM, content=SYSTEM_PROMPT),
+                ChatMessage(role=MessageRole.USER, content=user_message(context, query, nodes)),
+            ]
 
-        gen_started = time.monotonic()
-        handle.current_span("generate")
-        response = self.llm.chat(messages)
-        generation_s = time.monotonic() - gen_started
-        raw_answer = str(response.message.content).strip()
-        usage = getattr(self.llm, "last_usage", None) or {}
-        handle.record(
-            "generate",
-            input=user_message(context, query, nodes)[:8000],
-            output=raw_answer,
-            metadata={
-                "chunks": len(nodes),
-                "model": LLM_MODEL,
-                "provider": LLM_PROVIDER,
-            },
-            usage=usage,
-        )
+            gen_started = time.monotonic()
+            handle.current_span("generate")
+            response = self.llm.chat(messages)
+            generation_s = time.monotonic() - gen_started
+            raw_answer = str(response.message.content).strip()
+            usage = getattr(self.llm, "last_usage", None) or {}
+            handle.record(
+                "generate",
+                input=user_message(context, query, nodes)[:8000],
+                output=raw_answer,
+                metadata={
+                    "chunks": len(nodes),
+                    "model": LLM_MODEL,
+                    "provider": LLM_PROVIDER,
+                },
+                usage=usage,
+            )
 
-        grounded, dropped = ground_citations(raw_answer, nodes)
-        latency = time.monotonic() - started
+            grounded, dropped = ground_citations(raw_answer, nodes)
+            latency = time.monotonic() - started
 
-        handle.finish(
-            output=grounded,
-            metadata={"chunks": len(nodes), "dropped": dropped},
-            usage=usage,
-        )
+            handle.finish(
+                output=grounded,
+                metadata={"chunks": len(nodes), "dropped": dropped},
+                usage=usage,
+            )
+        except Exception:
+            # Закрываем трейс/спаны при ошибке, чтобы OTel-контекст не «протёк»
+            # в следующий запрос того же worker-потока.
+            handle.finish(output="", metadata={"error": True}, status="ERROR")
+            raise
 
         return RAGAnswer(
             answer=grounded,
