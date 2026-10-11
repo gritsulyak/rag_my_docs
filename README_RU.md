@@ -82,6 +82,9 @@
   `gigachat` (облако Sber, OAuth+REST).
 - **Ретрив** (`src/normdoc/indexing.py`) — Qdrant + LlamaIndex, реранкер.
 - **Ассистент** (`src/normdoc/assistant.py`) — оркестрация + замер latency.
+- **HTTP и веб-UI** (`src/normdoc/api.py`, `src/normdoc/webui.py`) — FastAPI
+  `POST /answer` плюс встроенная страница чата (`/`) и HTML-fallback без JS
+  (`GET /ask`) для консольных браузеров.
 - **Парсинг/чанкинг** (`src/normdoc/parsing.py`) — PyMuPDF, OCR-сайдкары,
   семантический чанкинг по токенам.
 - **Цитаты** (`src/normdoc/prompts.py`) — `ground_citations` убирает
@@ -115,7 +118,8 @@ curl -s localhost:8000/health
 curl -s localhost:8000/answer -H 'Content-Type: application/json' \
      -d '{"question":"Что такое описание архитектуры?"}' | jq
 
-# 6) Откройте Langfuse (трейсы) — http://localhost:3000
+# 6) Откройте веб-чат — http://localhost:8000/
+#    Langfuse (трейсы) — http://localhost:3000
 #    API — http://localhost:8000/docs
 ```
 
@@ -261,8 +265,23 @@ uv run python scripts/build_index.py --reset --collection normdoc_e5_small
 Сервис — `src/normdoc/api.py` (FastAPI). Интерактивная документация:
 `http://localhost:8000/docs`.
 
+**Веб-чат (браузер):** откройте `http://localhost:8000/` — встроенный чат
+(задавать вопросы, просматривать историю ответов, видеть источники, latency и
+отброшенные цитаты; без внешних CDN, работает офлайн). Та же страница умеет
+работать как обычная HTML-форма (`GET /ask`) без JavaScript — годится и для
+консольных браузеров:
+
+```bash
+w3m  "http://localhost:8000/"                       # консольный браузер (UI)
+curl -s "http://localhost:8000/ask?q=Что+такое+описание+архитектуры?"
+lynx -dump "http://localhost:8000/ask?q=…"           # текстовый ответ в терминале
+```
+
 | Метод | Путь | Назначение |
 |---|---|---|
+| `GET` | `/` | веб-чат (браузер; `/ui` — алиас) |
+| `GET` | `/ask` | ответ HTML-страницей по `?q=…` (без JS / консольные браузеры) |
+| `GET` | `/info` | справка о сервисе (JSON) |
 | `GET` | `/health` | статус, коллекция, модель |
 | `POST`| `/answer` | вопрос → ответ, источники, latency, usage |
 | `GET` | `/metrics` | метрики Prometheus (latency/throughput) |
@@ -423,10 +442,10 @@ perf-таблицу, нагрузочные тесты с графиками, т
 │   ├── hw/                     # профили железа (ai395, amd_7840hs, rtx3060)
 │   ├── llms/                   # профили LLM (bonsai, meno, gigachat, avito, …)
 │   └── embeddings/             # профили эмбеддингов (e5_small, bge_m3, …)
-├── src/normdoc/                # код: assistant, llm, api, indexing, parsing,
+├── src/normdoc/                # код: assistant, llm, api, webui, indexing, parsing,
 │                               #   prompts, monitoring, reporting, qa, model_catalog
 ├── scripts/                    # prepare_docs, build_index, chat, serve_api,
-│                               #   evaluate_ragas, compare_configs, benchmark_rag,
+│                               #   evaluate_ragas, compare_configs, benchmark_rag, compare_plots,
 │                               #   load_test, langfuse_report, report, run_tests, list_models
 ├── data/
 │   ├── raw/sources/            # ваши документы (приватные, не публикуются)

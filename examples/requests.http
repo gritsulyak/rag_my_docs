@@ -8,6 +8,13 @@
 ###
 ### @baseUrl = http://localhost:8000
 
+### Инфо о сервисе
+GET {{baseUrl}}/info
+
+### Веб-чат (открыть в браузере): {{baseUrl}}/
+### Текстовый fallback без JS (консольные браузеры w3m/lynx/curl):
+GET {{baseUrl}}/ask?q=Что такое описание архитектуры по ГОСТ Р 57100—2025?
+
 ### Статус сервиса
 GET {{baseUrl}}/health
 

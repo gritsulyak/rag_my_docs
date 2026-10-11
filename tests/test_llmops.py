@@ -256,6 +256,25 @@ class TestApi:
         assert "rag_requests_total" in text
         assert "rag_total_latency_seconds" in text
 
+    def test_ui_page_served(self, client):
+        resp = client.get("/")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/html")
+        assert "/answer" in resp.text and "/ask" in resp.text and "<textarea" in resp.text
+
+    def test_ui_alias_and_info(self, client):
+        assert client.get("/ui").status_code == 200
+        info = client.get("/info").json()
+        assert "/ask" in info["endpoints"] and info["service"] == "normdoc-assistant"
+
+    def test_ask_html_fallback(self, client):
+        resp = client.get("/ask", params={"q": "Что такое архитектура?"})
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/html")
+        assert "Тестовый ответ" in resp.text
+        assert "gost.pdf" in resp.text and "Источники" in resp.text
+        assert client.get("/ask").status_code == 422  # без q
+
 
 # ----------------------------------------------------------------- llm providers
 class _FakeResp:

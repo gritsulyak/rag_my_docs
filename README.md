@@ -80,6 +80,9 @@ answers strictly from them.
   `gigachat` (Sber cloud, OAuth+REST).
 - **Retrieval** (`src/normdoc/indexing.py`) — Qdrant + LlamaIndex, reranker.
 - **Assistant** (`src/normdoc/assistant.py`) — orchestration + latency metering.
+- **HTTP & web UI** (`src/normdoc/api.py`, `src/normdoc/webui.py`) — FastAPI
+  `POST /answer` plus a built-in chat page (`/`) and a no-JS HTML fallback
+  (`GET /ask`) for console browsers.
 - **Parsing/chunking** (`src/normdoc/parsing.py`) — PyMuPDF, OCR sidecars,
   token-based semantic chunking.
 - **Citations** (`src/normdoc/prompts.py`) — `ground_citations` removes
@@ -113,7 +116,8 @@ curl -s localhost:8000/health
 curl -s localhost:8000/answer -H 'Content-Type: application/json' \
      -d '{"question":"What is an architecture description?"}' | jq
 
-# 6) Open Langfuse (traces) — http://localhost:3000
+# 6) Open the web chat — http://localhost:8000/
+#    Langfuse (traces) — http://localhost:3000
 #    API docs — http://localhost:8000/docs
 ```
 
@@ -259,8 +263,22 @@ Embeddings are switched by the `configs/embeddings/*.env` profile (`e5_small`,
 Service: `src/normdoc/api.py` (FastAPI). Interactive docs:
 `http://localhost:8000/docs`.
 
+**Web chat (browser):** open `http://localhost:8000/` — a built-in chat UI
+(ask questions, browse the answer history, see sources, latency and dropped
+citations; no external CDN, works offline). The same page falls back to a plain
+HTML form (`GET /ask`) when JavaScript is disabled, so console browsers also work:
+
+```bash
+w3m  "http://localhost:8000/"                       # console browser (UI)
+curl -s "http://localhost:8000/ask?q=What+is+an+architecture+description?"
+lynx -dump "http://localhost:8000/ask?q=…"           # text answer in terminal
+```
+
 | Method | Path | Purpose |
 |---|---|---|
+| `GET` | `/` | web chat UI (browser; `/ui` is an alias) |
+| `GET` | `/ask` | answer as an HTML page for `?q=…` (no-JS / console browsers) |
+| `GET` | `/info` | service info (JSON) |
 | `GET` | `/health` | status, collection, model |
 | `POST`| `/answer` | question → answer, sources, latency, usage |
 | `GET` | `/metrics` | Prometheus metrics (latency/throughput) |
@@ -421,10 +439,10 @@ latency, tests, the RU model catalog and the Docker/serving section.
 │   ├── hw/                     # hardware profiles (ai395, amd_7840hs, rtx3060)
 │   ├── llms/                   # LLM profiles (bonsai, meno, gigachat, avito, …)
 │   └── embeddings/             # embedding profiles (e5_small, bge_m3, …)
-├── src/normdoc/                # code: assistant, llm, api, indexing, parsing,
+├── src/normdoc/                # code: assistant, llm, api, webui, indexing, parsing,
 │                               #   prompts, monitoring, reporting, qa, model_catalog
 ├── scripts/                    # prepare_docs, build_index, chat, serve_api,
-│                               #   evaluate_ragas, compare_configs, benchmark_rag,
+│                               #   evaluate_ragas, compare_configs, benchmark_rag, compare_plots,
 │                               #   load_test, langfuse_report, report, run_tests, list_models
 ├── data/
 │   ├── raw/sources/            # your documents (private, not published)

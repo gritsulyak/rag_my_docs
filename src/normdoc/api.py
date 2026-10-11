@@ -1,10 +1,14 @@
 """HTTP-сервис RAG-ассистента (FastAPI).
 
 Эндпоинты:
+    GET  /         — веб-чат (HTML, браузер; fallback на /ask без JS);
+    GET  /ui       — то же, что /;
+    GET  /ask      — ответ HTML по ``?q=…`` (консольные браузеры: w3m/lynx/curl);
+    GET  /info     — краткая справка о сервисе (JSON);
     GET  /health   — статус, коллекция, модель;
-    POST /answer   — вопрос -> ответ, источники, latency, usage (трейс Langfuse);
+    POST /answer   — вопрос -> ответ, источники, latency, usage (JSON, трейс Langfuse);
     GET  /metrics  — метрики Prometheus (latency/throughput для нагрузочных тестов);
-    GET  /         — краткая справка.
+    GET  /docs     — интерактивная документация OpenAPI.
 
 Запуск локально:
     uv run python scripts/serve_api.py --port 8000
@@ -19,8 +23,8 @@ from __future__ import annotations
 import threading
 import time
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import Response
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import HTMLResponse, Response
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
     CollectorRegistry,
@@ -30,6 +34,7 @@ from prometheus_client import (
 )
 from pydantic import BaseModel, Field
 
+from normdoc import webui
 from normdoc.assistant import NormDocAssistant, build_assistant
 from normdoc.config import COLLECTION_NAME, LLM_MODEL, LLM_PROVIDER, TOP_K
 
@@ -114,14 +119,26 @@ def get_assistant(collection: str, top_k: int) -> NormDocAssistant:
         return _ASSISTANTS[key]
 
 
-@app.get("/")
-def root() -> dict:
+@app.get("/", response_class=HTMLResponse)
+def root() -> HTMLResponse:
+    """Веб-чат (браузер). Без JS форма отправляется на ``GET /ask``."""
+    return HTMLResponse(webui.chat_page(COLLECTION_NAME, LLM_MODEL, TOP_K))
+
+
+@app.get("/ui", response_class=HTMLResponse)
+def ui() -> HTMLResponse:
+    """Алиас веб-чата."""
+    return HTMLResponse(webui.chat_page(COLLECTION_NAME, LLM_MODEL, TOP_K))
+
+
+@app.get("/info")
+def info() -> dict:
     return {
         "service": "normdoc-assistant",
         "collection": COLLECTION_NAME,
         "llm_provider": LLM_PROVIDER,
         "llm_model": LLM_MODEL,
-        "endpoints": ["/health", "/answer", "/metrics", "/docs"],
+        "endpoints": ["/", "/ask", "/health", "/answer", "/metrics", "/docs", "/info"],
     }
 
 
@@ -135,12 +152,11 @@ def health() -> dict:
     }
 
 
-@app.post("/answer", response_model=AnswerResponse)
-def answer(request: AnswerRequest) -> AnswerResponse:
-    top_k = request.top_k or TOP_K
+def _answer_impl(question: str, top_k: int) -> AnswerResponse:
+    """Общая логика ответа для JSON (``POST /answer``) и HTML (``GET /ask``)."""
     try:
         assistant = get_assistant(COLLECTION_NAME, top_k)
-        result = assistant.answer(request.question)
+        result = assistant.answer(question)
     except Exception as exc:  # noqa: BLE001
         REQUESTS.labels(status="error").inc()
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -174,6 +190,27 @@ def answer(request: AnswerRequest) -> AnswerResponse:
         collection=assistant.collection_name,
         model=LLM_MODEL,
     )
+
+
+@app.post("/answer", response_model=AnswerResponse)
+def answer(request: AnswerRequest) -> AnswerResponse:
+    return _answer_impl(request.question, request.top_k or TOP_K)
+
+
+@app.get("/ask", response_class=HTMLResponse)
+def ask(
+    q: str = Query(..., min_length=1, description="Вопрос по документам"),
+    top_k: int = Query(TOP_K, ge=1, le=20, description="Сколько чанков извлекать"),
+) -> HTMLResponse:
+    """Ответ в виде HTML-страницы — для браузеров без JS и консольных (w3m/lynx/curl)."""
+    response = _answer_impl(q, top_k)
+    body_html = webui.render_answer(
+        response,
+        [s.model_dump() for s in response.sources],
+        response.collection,
+        response.model,
+    )
+    return HTMLResponse(webui.answer_page(question=q, body_html=body_html, top_k=top_k))
 
 
 @app.get("/metrics")

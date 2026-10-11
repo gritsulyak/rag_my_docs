@@ -42,7 +42,13 @@
 uv run python scripts/serve_api.py --port 8000
 #    или: docker compose --profile cpu up -d app
 
-# 2) один вопрос
+# 2) веб-чат в браузере и текстовый fallback (без JS / консоль)
+#    браузер:      http://localhost:8000/
+#    консоль:      w3m http://localhost:8000/  (или lynx)
+curl -s "http://localhost:8000/ask?q=Каким+приказом+утверждён+ГОСТ+Р+57100—2025?" \
+  | sed -e 's/<[^>]*>//g'
+
+# 2б) один вопрос через JSON-API
 curl -s localhost:8000/answer -H 'Content-Type: application/json' \
   -d '{"question":"Каким приказом утверждён ГОСТ Р 57100—2025?"}' | jq
 
