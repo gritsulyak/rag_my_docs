@@ -1,7 +1,9 @@
 # docker-compose для normdoc-assistant: Qdrant + llama.cpp (GPU-профили) + API + Langfuse.
 #
 # Профили (выбор железа/сервисов):
-#   ai395   — AMD Ryzen AI MAX+ 395 / Radeon 8060S: llama.cpp с Vulkan;
+#   ai395    — AMD Ryzen AI MAX+ 395 / Radeon 8060S: llama.cpp с Vulkan (сборка из исходников);
+#   amd7840hs — AMD Ryzen 7 7840HS / Radeon 780M (iGPU): Vulkan на ПРЕДСОБРАННЫХ
+#              бинарниках PrismML (см. PRISM_VULKAN_DIR), без сборки из исходников;
 #   rtx3060 — NVIDIA RTX 3060 (отдельный «карточный» бокс): llama.cpp с CUDA;
 #   rocm    — AMD через ROCm/HIP (альтернатива Vulkan);
 #   cpu     — без ускорения (любая машина);
@@ -10,6 +12,7 @@
 #
 # Примеры:
 #   docker compose --profile ai395 --profile monitoring up -d --build
+#   docker compose --profile amd7840hs --profile monitoring up -d --build
 #   docker compose --profile rtx3060 up -d
 #   docker compose --profile cpu --profile tools run --rm app python scripts/load_test.py --url http://app:8000
 #
@@ -22,7 +25,7 @@ x-llama-common: &llama-common
   restart: unless-stopped
   volumes:
     - ${MODELS_DIR:-./models}:/models:ro
-  environment:
+  environment: &llama-env
     PORT: "8080"
     MODEL_FILE: ${MODEL_FILE:-}
     MODEL_ALIAS: ${MODEL_ALIAS:-local}
@@ -79,7 +82,7 @@ services:
     restart: unless-stopped
     ports:
       - "${QDRANT_PORT:-6333}:6333"
-      - "6334:6334"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
     volumes:
       - qdrant_data:/qdrant/storage
     environment:
@@ -104,8 +107,10 @@ services:
       - /dev/dri:/dev/dri
       - /dev/kfd:/dev/kfd
     group_add:
-      - video
-      - render
+      # Числовые GID: групп может не быть в базовом образе (важен для AMD/Vulkan).
+      # Значения по умолчанию — Ubuntu; при отличии задайте VIDEO_GID/RENDER_GID в .env.
+      - "${VIDEO_GID:-44}"
+      - "${RENDER_GID:-992}"
 
   # ------------------------------------------------------- llama.cpp: RTX 3060 (CUDA)
   llama-cuda:
@@ -145,8 +150,10 @@ services:
       - /dev/dri:/dev/dri
       - /dev/kfd:/dev/kfd
     group_add:
-      - video
-      - render
+      # Числовые GID: групп может не быть в базовом образе (важен для AMD/Vulkan).
+      # Значения по умолчанию — Ubuntu; при отличии задайте VIDEO_GID/RENDER_GID в .env.
+      - "${VIDEO_GID:-44}"
+      - "${RENDER_GID:-992}"
     security_opt:
       - seccomp:unconfined
 
@@ -161,7 +168,35 @@ services:
         BACKEND: cpu
     image: normdoc-llama:cpu
     environment:
+      <<: *llama-env
       N_GPU_LAYERS: "0"
+
+  # ------------------------- llama.cpp: Ryzen 7 7840HS / Radeon 780M (Vulkan, prebuilt)
+  # Использует готовые бинарники PrismML llama.cpp (Vulkan) из PRISM_VULKAN_DIR —
+  # без многочасовой сборки из исходников. Каталог монтируется read-only в /opt/prism,
+  # entrypoint сам находит llama-server и подхватывает .so через LD_LIBRARY_PATH.
+  # Требует только /dev/dri (RADV/Mesa); /dev/kfd нужен лишь для ROCm.
+  llama-7840hs:
+    <<: *llama-common
+    profiles: ["amd7840hs", "vulkan-780m"]
+    build:
+      context: .
+      dockerfile: docker/llama/Dockerfile.prism
+    image: normdoc-llama:prism-vulkan
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      # Числовые GID: групп может не быть в базовом образе (важен для AMD/Vulkan).
+      # Значения по умолчанию — Ubuntu; при отличии задайте VIDEO_GID/RENDER_GID в .env.
+      - "${VIDEO_GID:-44}"
+      - "${RENDER_GID:-992}"
+    environment:
+      <<: *llama-env
+      PRISM_DIR: /opt/prism
+    volumes:
+      - ${MODELS_DIR:-./models}:/models:ro
+      # По умолчанию — каталог рядом с репозиторием (см. scripts/serve_llm.sh).
+      - ${PRISM_VULKAN_DIR:-../../llm_eng/prism-vulkan}:/opt/prism:ro
 
   # ------------------------------------------------------------------ RAG API
   app:

@@ -2,6 +2,7 @@
 #
 # Основные сценарии:
 #   make up-ai395      # поднять стек на AMD Ryzen AI MAX+ 395 (llama.cpp Vulkan)
+#   make up-7840hs     # поднять стек на AMD Ryzen 7 7840HS / 780M (Vulkan, prebuilt)
 #   make up-rtx3060    # поднять стек на NVIDIA RTX 3060 (llama.cpp CUDA)
 #   make up-cpu        # поднять стек без GPU
 #   make monitoring    # поднять self-hosted Langfuse (трейсы + latency)
@@ -25,9 +26,14 @@ help:
 	@grep -E '^[a-zA-Z0-9_-]+:' Makefile | sed 's/:.*//' | sort -u | sed 's/^/  make /'
 
 # ---------------------------------------------------------------- инфраструктура
-.PHONY: up-ai395 up-rtx3060 up-rocm up-cpu monitoring down logs ps build
+.PHONY: up-ai395 up-7840hs up-rtx3060 up-rocm up-cpu monitoring down logs ps build
 up-ai395:
 	$(COMPOSE) --profile ai395 --profile monitoring up -d --build
+
+# AMD Ryzen 7 7840HS / Radeon 780M — Vulkan на предсобранных бинарниках PrismML.
+# Требует каталог PRISM_VULKAN_DIR (см. .env.example), сборка llama.cpp не нужна.
+up-7840hs:
+	$(COMPOSE) --profile amd7840hs --profile monitoring up -d --build
 
 up-rtx3060:
 	$(COMPOSE) --profile rtx3060 --profile monitoring up -d --build
@@ -42,7 +48,7 @@ monitoring:
 	$(COMPOSE) --profile monitoring up -d
 
 down:
-	$(COMPOSE) --profile ai395 --profile rtx3060 --profile rocm --profile cpu --profile monitoring --profile tools down
+	$(COMPOSE) --profile ai395 --profile amd7840hs --profile rtx3060 --profile rocm --profile cpu --profile monitoring --profile tools down
 
 logs:
 	$(COMPOSE) logs -f --tail=100
@@ -51,7 +57,7 @@ ps:
 	$(COMPOSE) ps
 
 build:
-	$(COMPOSE) --profile ai395 --profile rtx3060 --profile cpu build
+	$(COMPOSE) --profile ai395 --profile amd7840hs --profile rtx3060 --profile cpu build
 
 # ------------------------------------------------------------------- пайплайн
 .PHONY: prepare index

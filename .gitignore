@@ -24,6 +24,8 @@ results/*.md
 
 # Локальные конфиги и секреты
 .env
+.env.*
+!.env.example
 configs/hw/*.local.env
 configs/llms/*.local.env
 

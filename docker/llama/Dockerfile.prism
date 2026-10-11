@@ -1,0 +1,38 @@
+# llama.cpp server на ПРЕДСОБРАННЫХ бинарниках PrismML (Vulkan).
+#
+# Зачем: на рядовых AMD-ноутбуках/мини-ПК (например Ryzen 7 7840HS + Radeon 780M)
+# сборка llama.cpp из исходников занимает часы, а готовых CUDA-колёс нет. Здесь
+# используется уже собранный PrismML-релиз llama.cpp (Vulkan), который монтируется
+# в контейнер из каталога PRISM_VULKAN_DIR (по умолчанию ../../llm_eng/prism-vulkan,
+# рядом с репозиторием — как в scripts/serve_llm.sh и scripts/start_meno.sh).
+#
+# Образ содержит только runtime-зависимости (Vulkan loader + Mesa RADV) и
+# entrypoint; сами бинарники НЕ копируются в образ (монтируются read-only),
+# поэтому образ маленький и не раздувает git/docker-контекст.
+#
+# Пример сборки/запуска (обычно через docker-compose, профиль amd7840hs):
+#   docker build -f docker/llama/Dockerfile.prism -t normdoc-llama:prism-vulkan .
+#   PRISM_VULKAN_DIR=~/github/llm_eng/prism-vulkan \
+#     docker compose --profile amd7840hs up -d --build
+
+ARG BASE_IMAGE=ubuntu:24.04
+FROM ${BASE_IMAGE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Vulkan runtime: loader + Mesa (RADV) для AMD iGPU Radeon 780M (gfx1103).
+# Плюс библиотеки, которые линкует llama-server: libgomp (OpenMP), libssl/libcrypto,
+# libstdc++ (в базовом образе). curl — для healthcheck в docker-compose.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libvulkan1 mesa-vulkan-drivers vulkan-tools \
+        libgomp1 libssl3 libcurl4 \
+        ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Общий entrypoint: умеет и source-сборку (llama-server из PATH), и предсобранную
+# (PRISM_DIR с бинарниками llama.cpp).
+COPY docker/llama/entrypoint.sh /opt/llama/entrypoint.sh
+RUN chmod +x /opt/llama/entrypoint.sh
+
+EXPOSE 8080
+ENTRYPOINT ["/opt/llama/entrypoint.sh"]

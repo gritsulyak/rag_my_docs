@@ -117,19 +117,20 @@ curl -s localhost:8000/answer -H 'Content-Type: application/json' \
 #    API docs — http://localhost:8000/docs
 ```
 
-The `Makefile` offers short commands: `make up-ai395`, `make index`,
-`make test`, `make ragas`, `make load`, `make report`.
+The `Makefile` offers short commands: `make up-ai395`, `make up-7840hs`,
+`make index`, `make test`, `make ragas`, `make load`, `make report`.
 
 ---
 
-## 4. Hardware profiles: AI MAX+ 395 and RTX 3060
+## 4. Hardware profiles: AI MAX+ 395, 7840HS and RTX 3060
 
 `llama.cpp` is the only inference engine; the acceleration backend is chosen by
 the **docker-compose profile** (see [`docker/llama/Dockerfile`](docker/llama/Dockerfile)).
 
 | Profile | Hardware | llama.cpp backend | Command |
 |---|---|---|---|
-| `ai395` | **AMD Ryzen AI MAX+ 395** / Radeon 8060S (Strix Halo, gfx1151) | **Vulkan** (`/dev/dri`, `/dev/kfd`) | `docker compose --profile ai395 up -d --build` |
+| `ai395` | **AMD Ryzen AI MAX+ 395** / Radeon 8060S (Strix Halo, gfx1151) | **Vulkan**, built from source (`/dev/dri`, `/dev/kfd`) | `docker compose --profile ai395 up -d --build` |
+| `amd7840hs` | **AMD Ryzen 7 7840HS** / Radeon 780M iGPU (gfx1103) | **Vulkan**, prebuilt PrismML binaries (`/dev/dri`) | `docker compose --profile amd7840hs up -d --build` |
 | `rtx3060` | **NVIDIA RTX 3060 12 GB** (separate box, sm_86) | **CUDA** (nvidia runtime) | `docker compose --profile rtx3060 up -d --build` |
 | `rocm` | AMD via ROCm/HIP | **HIP/ROCm** | `docker compose --profile rocm up -d --build` |
 | `cpu` | any machine | CPU | `docker compose --profile cpu up -d --build` |
@@ -139,6 +140,18 @@ the **docker-compose profile** (see [`docker/llama/Dockerfile`](docker/llama/Doc
 **Vulkan vs ROCm on AMD.** The AI MAX+ 395 defaults to **Vulkan**: it starts
 reliably on RADV/Mesa without chasing ROCm versions; the ROCm profile is kept as
 an alternative (needs `AMDGPU_TARGETS=gfx1151`, set in `.env`).
+
+**`amd7840hs` — prebuilt PrismML Vulkan (no source build).** On a laptop/mini-PC
+with the Radeon 780M iGPU, compiling `llama.cpp` from source is slow, so this
+profile reuses a **prebuilt PrismML Vulkan release** of `llama.cpp`. Point
+`PRISM_VULKAN_DIR` (`.env`, default `../../llm_eng/prism-vulkan`) at a directory
+that contains `llama-prism-*/llama-server` (or the extracted
+`prism-vulkan.tar.gz`); it is mounted read-only into the container. The runtime
+image only ships the Vulkan loader and Mesa RADV
+([`docker/llama/Dockerfile.prism`](docker/llama/Dockerfile.prism)); the entrypoint
+locates `llama-server` and adds its `.so` files to `LD_LIBRARY_PATH`. The same
+host binaries are used by `scripts/serve_llm.sh` / `scripts/start_meno.sh` for
+local (non-Docker) runs.
 
 **RTX 3060.** Wherever the card lives (same host or a separate "card" box), the
 launch is identical: `--profile rtx3060`. The host needs
@@ -402,7 +415,8 @@ latency, tests, the RU model catalog and the Docker/serving section.
 ├── Makefile                    # short run commands
 ├── docker/
 │   ├── app/Dockerfile          # RAG application image (FastAPI)
-│   └── llama/{Dockerfile,entrypoint.sh}   # llama.cpp: Vulkan/CUDA/ROCm/CPU
+│   ├── llama/{Dockerfile,entrypoint.sh}   # llama.cpp: Vulkan/CUDA/ROCm/CPU (from source)
+│   └── llama/Dockerfile.prism              # llama.cpp: prebuilt PrismML Vulkan (7840HS)
 ├── configs/
 │   ├── hw/                     # hardware profiles (ai395, amd_7840hs, rtx3060)
 │   ├── llms/                   # LLM profiles (bonsai, meno, gigachat, avito, …)
@@ -440,8 +454,10 @@ thresholds.
 | Symptom | Cause / fix |
 |---|---|
 | `GGUF not found` | `MODELS_DIR` is empty; set `MODEL_FILE=/models/<file>.gguf` |
-| `app` cannot see the LLM | the llama profile is not up (`ai395`/`rtx3060`/`cpu`); check `docker compose ps` |
+| `app` cannot see the LLM | the llama profile is not up (`ai395`/`amd7840hs`/`rtx3060`/`cpu`); check `docker compose ps` |
 | No GPU inside the container | for Vulkan/ROCm — `group_add: video,render` and `/dev/dri`,`/dev/kfd`; for CUDA — nvidia-container-toolkit |
+| `llama-server не найден в PRISM_DIR` | `PRISM_VULKAN_DIR` does not contain `llama-prism-*/llama-server`; extract `prism-vulkan.tar.gz` and point the variable at it |
+| Prebuilt Vulkan crashes on start | host/container Mesa mismatch: rebuild `normdoc-llama:prism-vulkan` (`docker compose --profile amd7840hs build --no-cache llama-7840hs`) — the image pins Ubuntu 24.04 + Mesa to match the host |
 | Langfuse is empty | `LANGFUSE_ENABLED=1`, `LANGFUSE_HOST=http://langfuse-web:3000`, keys match `LANGFUSE_INIT_*` |
 | Low RAGAS recall | increase `TOP_K`/`RETRIEVE_CANDIDATES`, enable the reranker, review chunking |
 | Slow generation | offload more layers to the GPU (`N_GPU_LAYERS`), reduce `N_CTX`, raise `N_PARALLEL` |
@@ -450,10 +466,13 @@ thresholds.
 
 ## 18. Limitations and assumptions
 
-- **Dev hardware** — AMD Ryzen 7 7840HS + Radeon 780M (CPU inference). The
-  `ai395` (Vulkan) and `rtx3060` (CUDA) profiles ship as configurations and are
-  built on the target hardware; the actual measurements in the report were taken
-  on the available hardware.
+- **Dev hardware** — AMD Ryzen 7 7840HS + Radeon 780M iGPU. The `amd7840hs`
+  profile serves the LLM on the iGPU through **Vulkan** (prebuilt PrismML
+  binaries, no source build); the `ai395` (Vulkan from source) and `rtx3060`
+  (CUDA) profiles ship as configurations and are built on the target hardware.
+  The actual measurements in the report were taken on the available hardware
+  (the numbers in `results/` were CPU-only; re-run on the iGPU profile to update
+  them).
 - **Avito A-vibe** — closed weights → represented as an OpenAI-compatible
   endpoint profile.
 - **Smallest open GigaChat weights** — MoE 10B/1.8B and 20B/3B (not strictly

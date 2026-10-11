@@ -54,6 +54,11 @@ jobs:
             dockerfile: docker/llama/Dockerfile
             build-args: |
               BACKEND=cpu
+          # Runtime-образ для предсобранных PrismML Vulkan-бинарников (профиль
+          # amd7840hs). Бинарники монтируются на хосте, поэтому сборке не нужны.
+          - image: llama-prism-vulkan
+            dockerfile: docker/llama/Dockerfile.prism
+            build-args: ""
     permissions:
       contents: read
       packages: write
