@@ -26,6 +26,10 @@
 | `e5_rerank_bonsai` | bonsai | e5_small | да | semantic | 0.976 | 0.667 | 0.833 | 41.28 |
 | `bge_rerank_bonsai` | bonsai | bge_m3 | да | semantic | 0.933 | 0.639 | 1.000 | 52.22 |
 
+**Контрольный прогон** на golden-наборе (`data/qa/golden_qa.jsonl`, вопросов: 3): Faithfulness **1.000**, ContextPrecision **0.956**, ContextRecall **1.000**; судья — `meno-lite`, LLM — `bonsai`, коллекция `normdoc_e5_small`, средняя латентность 23.03 с.
+
+Quality gate: пороги соблюдены — faithfulness 1.000/0.7; llm_context_precision_with_reference 0.956/0.4; context_recall 1.000/0.6.
+
 ## 4. Производительность (perf-тесты)
 Замеры латентности ретривера и генерации, скорости генерации (ток/с) и длины ответа.
 
@@ -63,7 +67,7 @@ HTTP-нагрузка на `/answer` под конкурентностью: RPS,
 | `local-1791708849062` | Каким приказом утверждён ГОСТ Р 56939—2024 и взамен какого стандарта он введён? | 129.85 | retrieve: 10.02 / generate: 119.83 | 5 |
 
 ## 7. Тесты
-Итог последнего прогона: **42 passed in 58.10s**
+Итог последнего прогона: **43 passed in 59.68s**
 
 ## 8. Каталог рекомендованных РФ-моделей для локального RAG
 | Модель | Организация | Тип | Параметры | Контекст | Лицензия | HuggingFace | Запуск |
@@ -107,7 +111,7 @@ HTTP-нагрузка на `/answer` под конкурентностью: RPS,
 docker compose --profile ai395 --profile monitoring up -d --build
 ```
 
-Активные сервисы: `langfuse-clickhouse`, `langfuse-minio`, `langfuse-minio-init`, `langfuse-postgres`, `langfuse-redis`, `langfuse-web`, `langfuse-worker`, `qdrant`, `app`, `llama-vulkan`.
+Активные сервисы: `qdrant`, `app`, `langfuse-clickhouse`, `langfuse-minio`, `langfuse-minio-init`, `langfuse-redis`, `langfuse-postgres`, `langfuse-web`, `langfuse-worker`, `llama-vulkan`.
 
 ## 10. Воспроизведение
 ```bash

@@ -13,6 +13,7 @@ data/chunks/
 data/raw/pdf/
 data/raw/ocr/
 results/*.json
+results/*.jsonl
 results/*.md
 !results/.gitkeep
 # Отчёт — часть сдаваемого результата, его держим в репозитории.

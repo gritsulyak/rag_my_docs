@@ -453,6 +453,12 @@ git не попадают. Профили `configs/{hw,llms,embeddings}` выб�
   эндпоинт-профиль.
 - **Наименьшие открытые веса GigaChat** — MoE 10B/1.8B и 20B/3B (не строго
   5–8B); в каталоге это отражено.
+- **Langfuse на dev-машине.** Полный self-hosted стек Langfuse (Postgres +
+  ClickHouse + Redis + MinIO + web + worker) описан в `docker-compose.yml`
+  (профиль `monitoring`) и рассчитан на целевые боксы (AI MAX+ 395, 128 ГБ).
+  На слабой dev-машине он не поднимался (недостаток RAM); трейсы для отчёта
+  собраны через встроенный JSONL-сток (`TRACE_JSONL`), формат совпадает с
+  `scripts/langfuse_report.py`.
 - Сканы распознаются OCR (tesseract); качество зависит от исходника.
 
 ---

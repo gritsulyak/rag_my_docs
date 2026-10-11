@@ -46,6 +46,42 @@ def ragas_table(results: dict) -> str:
     return "\n".join(lines)
 
 
+def ragas_single_section(run: dict | None) -> str:
+    """Сводка контрольного одиночного прогона RAGAS на golden-наборе.
+
+    Формат входа — ``results/ragas_golden.json`` (выход scripts/evaluate_ragas.py).
+    """
+    if not run:
+        return ""
+    metrics = run.get("metrics", {})
+    gate = run.get("gate", {}) or {}
+    details = gate.get("details") or {}
+    lines = [
+        f"**Контрольный прогон** на golden-наборе "
+        f"(`data/qa/golden_qa.jsonl`, вопросов: {run.get('n_questions', '—')}): "
+        f"Faithfulness **{_fmt(metrics.get('faithfulness'))}**, "
+        f"ContextPrecision **{_fmt(metrics.get('llm_context_precision_with_reference'))}**, "
+        f"ContextRecall **{_fmt(metrics.get('context_recall'))}**; "
+        f"судья — `{run.get('judge_model', '—')}`, LLM — `{run.get('llm_model', '—')}`, "
+        f"коллекция `{run.get('collection', '—')}`, "
+        f"средняя латентность {_fmt(run.get('latency_s_mean'), 2)} с.",
+    ]
+    if details:
+        if gate.get("passed") is True:
+            verdict = "**ПРОЙДЕН**"
+        elif gate.get("passed") is False:
+            verdict = "**НЕ ПРОЙДЕН**"
+        else:
+            ok = all(bool(v.get("ok")) for v in details.values())
+            verdict = "пороги соблюдены" if ok else "пороги не соблюдены"
+        thresholds = "; ".join(
+            f"{key} {_fmt(val.get('value'))}/{val.get('threshold')}"
+            for key, val in details.items()
+        )
+        lines += ["", f"Quality gate: {verdict} — {thresholds}."]
+    return "\n".join(lines)
+
+
 def perf_table(perfs: list[dict]) -> str:
     """Таблица perf-тестов по конфигурациям из results/perf_*.json."""
     if not perfs:
@@ -193,10 +229,12 @@ def build_report(
     loads: list[dict] | None = None,
     langfuse: dict | None = None,
     compose_info: dict | None = None,
+    ragas_single: dict | None = None,
 ) -> str:
     """Собирает полный markdown-отчёт."""
     env_lines = [f"- **{k}**: {v}" for k, v in environment.items() if v not in (None, "")]
     corpus_lines = [f"- **{k}**: {v}" for k, v in corpus.items() if v not in (None, "")]
+    single_section = ragas_single_section(ragas_single)
     return "\n\n".join(
         [
             "# RAG по нормативным документам — отчёт о качестве и производительности",
@@ -217,6 +255,7 @@ def build_report(
                     "контекста относительно эталона.",
                     "",
                     ragas_table(comparison),
+                    *(["", single_section] if single_section else []),
                 ]
             ),
             "\n".join(

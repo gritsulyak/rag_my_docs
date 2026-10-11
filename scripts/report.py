@@ -135,6 +135,11 @@ def load_langfuse() -> dict:
     return _read_json(RESULTS_DIR / "langfuse_traces.json")
 
 
+def load_ragas_single() -> dict:
+    """Контрольный одиночный прогон RAGAS на golden-наборе (results/ragas_golden.json)."""
+    return _read_json(RESULTS_DIR / "ragas_golden.json")
+
+
 def gather_compose_info() -> dict:
     """Пытается вытащить список сервисов из docker-compose, если docker доступен."""
     import shutil
@@ -182,6 +187,7 @@ def main() -> int:
         loads=loads,
         langfuse=langfuse,
         compose_info=gather_compose_info(),
+        ragas_single=load_ragas_single(),
     )
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

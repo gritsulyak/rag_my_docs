@@ -16,7 +16,9 @@
 SHELL := /bin/bash
 COMPOSE := docker compose
 MODELS_DIR ?= ./models
+QDRANT_COLLECTION ?= normdoc_e5_small
 export MODELS_DIR
+export QDRANT_COLLECTION
 
 .PHONY: help
 help:

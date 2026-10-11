@@ -13,6 +13,7 @@ dependencies = [
     "llama-index-vector-stores-qdrant>=0.8.1",
     "qdrant-client>=1.12.0,<1.14.0",
     "sentence-transformers>=3.0.0",
+    "torch>=2.2",
     "langfuse>=2.50",
     "langchain-core>=0.3.40",
     "langchain-huggingface>=0.1.0",
@@ -43,6 +44,17 @@ perf = [
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+
+# Эмбеддинги и реранкер считаются на CPU, поэтому тянем CPU-сборку torch
+# (без ~2.5 ГБ CUDA-колёс nvidia-*). Источник применяется и к транзитивной
+# зависимости torch из sentence-transformers.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
 
 [build-system]
 requires = ["hatchling"]

@@ -75,6 +75,30 @@ class TestReporting:
     def test_perf_table_empty(self):
         assert "нет данных" in reporting.perf_table([])
 
+    def test_ragas_single_section(self):
+        run = {
+            "n_questions": 3,
+            "judge_model": "meno-lite",
+            "llm_model": "bonsai",
+            "collection": "normdoc_e5_small",
+            "latency_s_mean": 23.0,
+            "metrics": {
+                "faithfulness": 1.0,
+                "llm_context_precision_with_reference": 0.956,
+                "context_recall": 1.0,
+            },
+            "gate": {
+                "passed": True,
+                "details": {
+                    "faithfulness": {"value": 1.0, "threshold": 0.7, "ok": True},
+                    "context_recall": {"value": 1.0, "threshold": 0.6, "ok": True},
+                },
+            },
+        }
+        md = reporting.ragas_single_section(run)
+        assert "Контрольный прогон" in md and "1.000" in md and "ПРОЙДЕН" in md
+        assert reporting.ragas_single_section({}) == ""
+
     def test_load_table_with_graph(self):
         loads = [
             {

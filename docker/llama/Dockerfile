@@ -16,6 +16,9 @@
 #
 # Обычно образы собираются автоматически из docker-compose.yml (профили ai395 / rtx3060 / cpu).
 ARG BASE_IMAGE=ubuntu:24.04
+# Рантайм-база задаётся глобально, чтобы её можно было подставить во второй FROM
+# (для CUDA/ROCm — соответствующие runtime-образы, см. docker-compose.yml).
+ARG RUNTIME_BASE_IMAGE=ubuntu:24.04
 FROM ${BASE_IMAGE} AS build
 
 ARG BACKEND=cpu
@@ -29,15 +32,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Бэкенд-специфичные зависимости.
+# Бэкенд-специфичные зависимости сборки.
+# ВНИМАНИЕ: для CUDA/ROCm используется специальная BASE_IMAGE (nvidia/cuda-devel,
+# rocm/dev-ubuntu-*-complete), где компилятор и SDK уже установлены, поэтому
+# дополнительных пакетов для них не требуется.
 RUN set -eux; \
     if [ "$BACKEND" = "vulkan" ]; then \
         apt-get update && apt-get install -y --no-install-recommends \
             libvulkan-dev vulkan-tools glslc spirv-tools libshaderc-dev \
-        && rm -rf /var/lib/apt/lists/*; \
-    elif [ "$BACKEND" = "rocm" ]; then \
-        apt-get update && apt-get install -y --no-install-recommends \
-            hip-dev rocm-hip-sdk \
         && rm -rf /var/lib/apt/lists/*; \
     fi
 
@@ -59,9 +61,8 @@ RUN set -eux; \
     cmake --build /llama.cpp/build --config Release -j"$(nproc)" --target llama-server llama-bench
 
 # ---------------------------------------------------------------------------
-# Рантайм-база: для CUDA/ROCm задаётся отдельно (например, nvidia/cuda:*-runtime,
-# rocm/dev-ubuntu-22.04). По умолчанию — тот же Ubuntu, что и сборка.
-ARG RUNTIME_BASE_IMAGE=ubuntu:24.04
+# Рантайм-база: RUNTIME_BASE_IMAGE задаётся глобально выше (nvidia/cuda:*-runtime,
+# rocm/dev-ubuntu-22.04); по умолчанию — тот же Ubuntu, что и сборка.
 FROM ${RUNTIME_BASE_IMAGE} AS runtime
 ARG BACKEND=cpu
 ENV DEBIAN_FRONTEND=noninteractive
