@@ -73,9 +73,9 @@ def gather_environment() -> dict:
         "Коллекция по умолчанию": COLLECTION_NAME,
         "Qdrant": QDRANT_URL,
     }
-    try:
-        import os
+    import os
 
+    try:
         env["CPU"] = f"{platform.machine()} x{os.cpu_count()}"
     except Exception:
         pass
@@ -85,9 +85,16 @@ def gather_environment() -> dict:
         if torch.cuda.is_available():
             env["GPU"] = torch.cuda.get_device_name(0)
         else:
-            env["GPU"] = "нет (CPU)"
+            env["GPU"] = "нет (CUDA)"
     except Exception:
         env["GPU"] = "torch недоступен"
+    # Бэкенд инференса LLM задаётся явно (llama.cpp Vulkan/ROCm/CUDA, vLLM, …):
+    # torch не видит iGPU AMD, поэтому без этой переменной стенд выглядел бы «CPU».
+    serving = os.getenv("LLM_SERVING", "").strip()
+    if serving:
+        env["LLM-инференс"] = serving
+        if env.get("GPU") in (None, "нет (CUDA)"):
+            env["GPU"] = serving
     return env
 
 

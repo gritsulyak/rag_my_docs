@@ -1,15 +1,16 @@
 # RAG по нормативным документам — отчёт о качестве и производительности
 
 ## 1. Стенд
-- **ОС**: Linux 7.0.0-34-generic
+- **ОС**: Linux 7.0.0-38-generic
 - **Python**: 3.13.9
 - **CPU**: x86_64 x16
 - **RAM, ГБ**: 27.1
 - **Провайдер LLM**: openai
-- **LLM**: bonsai
+- **LLM**: meno-lite
 - **Коллекция по умолчанию**: normdoc_e5_small
-- **Qdrant**: http://localhost:6333
-- **GPU**: нет (CPU)
+- **Qdrant**: http://localhost:6335
+- **GPU**: llama.cpp Vulkan (AMD Radeon 780M iGPU)
+- **LLM-инференс**: llama.cpp Vulkan (AMD Radeon 780M iGPU)
 
 ## 2. Корпус
 - **Документов**: 13
@@ -22,47 +23,48 @@
 
 | Конфигурация | LLM | Эмбеддинги | Реранкер | Чанкинг | Faithfulness | ContextPrecision | ContextRecall | Ср. латентность, с |
 |---|---|---|---|---|---|---|---|---|
-| `baseline` | bonsai | e5_small | нет | semantic | 0.975 | 0.634 | 0.833 | 34.94 |
-| `e5_rerank_bonsai` | bonsai | e5_small | да | semantic | 0.976 | 0.667 | 0.833 | 41.28 |
-| `bge_rerank_bonsai` | bonsai | bge_m3 | да | semantic | 0.933 | 0.639 | 1.000 | 52.22 |
+| `baseline_igpu` | meno-lite (Vulkan iGPU) | e5_small | нет | semantic | 0.611 | 0.672 | 0.833 | 8.12 |
+| `e5_rerank_igpu` | meno-lite (Vulkan iGPU) | e5_small | да | semantic | 0.750 | 0.978 | 1.000 | 10.23 |
 
-**Контрольный прогон** на golden-наборе (`data/qa/golden_qa.jsonl`, вопросов: 3): Faithfulness **1.000**, ContextPrecision **0.956**, ContextRecall **1.000**; судья — `meno-lite`, LLM — `bonsai`, коллекция `normdoc_e5_small`, средняя латентность 23.03 с.
+**Контрольный прогон** на golden-наборе (`data/qa/golden_qa.jsonl`, вопросов: 6): Faithfulness **0.750**, ContextPrecision **0.978**, ContextRecall **1.000**; судья — `meno-lite`, LLM — `meno-lite`, коллекция `normdoc_e5_small`, средняя латентность 10.23 с.
 
-Quality gate: пороги соблюдены — faithfulness 1.000/0.7; llm_context_precision_with_reference 0.956/0.4; context_recall 1.000/0.6.
+Quality gate: **ПРОЙДЕН** — faithfulness 0.750/0.7; llm_context_precision_with_reference 0.978/0.4; context_recall 1.000/0.6.
 
 ## 4. Производительность (perf-тесты)
 Замеры латентности ретривера и генерации, скорости генерации (ток/с) и длины ответа.
 
 | Конфигурация | LLM | Коллекция | Реранкер | Ретрив p50, с | Ретрив p95, с | Генерация p50, с | Итого p50, с | ток/с | Ответ, симв. |
 |---|---|---|---|---|---|---|---|---|---|
-| `baseline` | bonsai | normdoc_e5_small | да | 9.372 | 9.876 | 46.927 | 56.385 | 2.57 | 229 |
+| `cpu` | bonsai | normdoc_e5_small | да | 9.372 | 9.876 | 46.927 | 56.385 | 2.57 | 229 |
+| `gpu` | meno-lite | normdoc_e5_small | да | 5.779 | 7.159 | 5.717 | 11.915 | 12.91 | 243 |
 
 ## 5. Нагрузочное тестирование инференса
 HTTP-нагрузка на `/answer` под конкурентностью: RPS, перцентили латентности, ошибки, токены/с. Графики строятся `scripts/load_test.py`.
 
 | Конфигурация | Запросов | Конкурентность | RPS | p50, с | p95, с | p99, с | Ошибок | ток/с |
 |---|---|---|---|---|---|---|---|---|
-| `local` | 12 | 3 | 0.03 | 78.41 | 154.40 | 156.25 | 0 | 2.39 |
+| `cpu` | 12 | 3 | 0.03 | 78.41 | 154.40 | 156.25 | 0 | 2.39 |
+| `gpu` | 24 | 4 | 0.11 | 35.77 | 46.77 | 51.36 | 0 | 4.18 |
 
 Графики латентности (латентность по запросам / распределение / перцентили):
 
-![Нагрузочный тест local](load_local.png)
+![Нагрузочный тест cpu](load_cpu.png)
+![Нагрузочный тест gpu](load_gpu.png)
 
 ## 6. Мониторинг Langfuse (трейсы и latency)
-Хост: `file:///home/rtg/github/gritsulyak/rag_my_docs/results/traces_local.jsonl`, трейсов: **7**, средняя латентность: **94.94 с**.
+Хост: `file://results/traces_gpu.jsonl`, трейсов: **6**, средняя латентность: **13.24 с**.
 
 | Trace | Вопрос | Латентность, с | Спаны (retrieve / generate, с) | Чанков |
 |---|---|---|---|---|
-| `local-1791708496086` | Какие требования к паролю пользователя средства контейнеризации 4 класса защиты  | 52.52 | retrieve: 35.50 / generate: 17.02 | 5 |
-| `local-1791708506138` | Сколько классов защиты устанавливается для средств контейнеризации Требованиями  | 62.57 | retrieve: 35.58 / generate: 27.00 | 5 |
-| `local-1791708519036` | На какой срок выдаётся сертификат соответствия процессов безопасной разработки п | 75.47 | retrieve: 35.67 / generate: 39.79 | 5 |
-| `local-1791708534571` | В какой срок ФСТЭК России рассматривает материалы сертификации, если экспертное  | 38.48 | retrieve: 22.10 / generate: 16.38 | 5 |
-| `local-1791708772632` | Каким приказом утверждён и введён в действие ГОСТ Р 57100—2025 и с какой даты он | 156.71 | retrieve: 19.61 / generate: 137.10 | 5 |
-| `local-1791708816514` | Что такое «описание архитектуры» по ГОСТ Р 57100—2025? | 148.98 | retrieve: 21.75 / generate: 127.23 | 5 |
-| `local-1791708849062` | Каким приказом утверждён ГОСТ Р 56939—2024 и взамен какого стандарта он введён? | 129.85 | retrieve: 10.02 / generate: 119.83 | 5 |
+| `local-1791746006532` | Сколько классов защиты устанавливается для средств контейнеризации Требованиями  | 14.21 | retrieve: 8.74 / generate: 5.47 | 5 |
+| `local-1791746021789` | Какие требования к паролю пользователя средства контейнеризации 4 класса защиты  | 15.26 | retrieve: 5.63 / generate: 9.62 | 5 |
+| `local-1791746031086` | На какой срок выдаётся сертификат соответствия процессов безопасной разработки п | 9.30 | retrieve: 6.13 / generate: 3.17 | 5 |
+| `local-1791746044968` | В какой срок ФСТЭК России рассматривает материалы сертификации, если экспертное  | 13.88 | retrieve: 5.91 / generate: 7.97 | 5 |
+| `local-1791746058144` | Каким приказом утверждён и введён в действие ГОСТ Р 58412—2019? | 13.18 | retrieve: 4.73 / generate: 8.45 | 5 |
+| `local-1791746071768` | На каком международном стандарте основан ГОСТ Р 59407—2021? | 13.62 | retrieve: 7.25 / generate: 6.37 | 5 |
 
 ## 7. Тесты
-Итог последнего прогона: **44 passed in 52.46s**
+Итог последнего прогона: **44 passed in 53.20s**
 
 ## 8. Каталог рекомендованных РФ-моделей для локального RAG
 | Модель | Организация | Тип | Параметры | Контекст | Лицензия | HuggingFace | Запуск |
@@ -93,7 +95,8 @@ HTTP-нагрузка на `/answer` под конкурентностью: RPS,
 
 | Профиль | Назначение | Бэкенд llama.cpp |
 |---|---|---|
-| `ai395` | AMD Ryzen AI MAX+ 395 / Radeon 8060S | Vulkan (`/dev/dri`,`/dev/kfd`) |
+| `ai395` | AMD Ryzen AI MAX+ 395 / Radeon 8060S | Vulkan, сборка из исходников (`/dev/dri`,`/dev/kfd`) |
+| `amd7840hs` | AMD Ryzen 7 7840HS / Radeon 780M (iGPU) | Vulkan, предсобранный PrismML (`/dev/dri`) |
 | `rtx3060` | NVIDIA RTX 3060 (отдельный бокс), sm_86 | CUDA (nvidia runtime) |
 | `rocm` | AMD через ROCm/HIP (gfx1151) | HIP/ROCm |
 | `cpu` | Любая машина без GPU | CPU |
@@ -106,12 +109,13 @@ HTTP-нагрузка на `/answer` под конкурентностью: RPS,
 docker compose --profile ai395 --profile monitoring up -d --build
 ```
 
-Активные сервисы: `llama-vulkan`, `qdrant`, `app`, `langfuse-minio`, `langfuse-minio-init`, `langfuse-redis`, `langfuse-clickhouse`, `langfuse-postgres`, `langfuse-web`, `langfuse-worker`.
+Активные сервисы: `llama-vulkan`, `qdrant`, `app`, `langfuse-minio`, `langfuse-minio-init`, `langfuse-redis`, `langfuse-postgres`, `langfuse-clickhouse`, `langfuse-worker`, `langfuse-web`.
 
 ## 10. Воспроизведение
 ```bash
 # 1) поднять стек (выберите профиль железа)
-docker compose --profile ai395 --profile monitoring up -d --build
+docker compose --profile ai395 --profile monitoring up -d --build      # AI MAX+ 395 (Vulkan, из исходников)
+docker compose --profile amd7840hs --profile monitoring up -d --build   # Ryzen 7840HS/780M (предсобранный Vulkan)
 
 # 2) корпус и индекс
 docker compose --profile tools run --rm app python scripts/prepare_docs.py
