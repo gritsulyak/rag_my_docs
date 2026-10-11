@@ -162,6 +162,69 @@ def load_table(loads: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _accel(cpu, gpu, *, higher_better: bool = False) -> str:
+    """Во сколько раз iGPU быстрее CPU по метрике (или «—»)."""
+    if not isinstance(cpu, (int, float)) or not isinstance(gpu, (int, float)) or not cpu or not gpu:
+        return "—"
+    ratio = (gpu / cpu) if higher_better else (cpu / gpu)
+    return f"×{ratio:.1f}"
+
+
+def cpu_gpu_section(data: dict | None, png_path: str | None = None) -> str:
+    """Сводное сравнение CPU и iGPU (perf + нагрузка + RAGAS) с графиком."""
+    data = data or {}
+    pc, pg = data.get("perf_cpu") or {}, data.get("perf_gpu") or {}
+    lc, lg = data.get("load_cpu") or {}, data.get("load_gpu") or {}
+    rc, rg = data.get("ragas_cpu") or {}, data.get("ragas_gpu") or {}
+    if not (pc or pg or lc or lg):
+        return "_(нет данных: сначала выполните perf/load-тесты на CPU и iGPU)_"
+
+    rows = [
+        ("Perf: ретрив p50, с", pc.get("retrieval_s", {}).get("p50"),
+         pg.get("retrieval_s", {}).get("p50"), False),
+        ("Perf: генерация p50, с", pc.get("generation_s", {}).get("p50"),
+         pg.get("generation_s", {}).get("p50"), False),
+        ("Perf: итого p50, с", pc.get("total_s", {}).get("p50"),
+         pg.get("total_s", {}).get("p50"), False),
+        ("Perf: скорость, ток/с", pc.get("tokens_per_s", {}).get("mean"),
+         pg.get("tokens_per_s", {}).get("mean"), True),
+        ("Нагрузка: p50, с", lc.get("latency_s", {}).get("p50"),
+         lg.get("latency_s", {}).get("p50"), False),
+        ("Нагрузка: p95, с", lc.get("latency_s", {}).get("p95"),
+         lg.get("latency_s", {}).get("p95"), False),
+        ("Нагрузка: p99, с", lc.get("latency_p99_s"),
+         lg.get("latency_p99_s"), False),
+        ("Нагрузка: RPS", lc.get("rps"), lg.get("rps"), True),
+        ("Нагрузка: скорость, ток/с", lc.get("tokens_per_s", {}).get("mean"),
+         lg.get("tokens_per_s", {}).get("mean"), True),
+        ("RAGAS: faithfulness", rc.get("metrics", {}).get("faithfulness"),
+         rg.get("metrics", {}).get("faithfulness"), True),
+        ("RAGAS: context precision", rc.get("metrics", {}).get("llm_context_precision_with_reference"),
+         rg.get("metrics", {}).get("llm_context_precision_with_reference"), True),
+        ("RAGAS: context recall", rc.get("metrics", {}).get("context_recall"),
+         rg.get("metrics", {}).get("context_recall"), True),
+        ("RAGAS: средняя латентность, с", rc.get("latency_s_mean"),
+         rg.get("latency_s_mean"), False),
+    ]
+    lines = [
+        "| Метрика | CPU | iGPU (Vulkan) | iGPU vs CPU |",
+        "|---|---|---|---|",
+    ]
+    for label, cpu, gpu, higher in rows:
+        lines.append(f"| {label} | {_fmt(cpu, 2)} | {_fmt(gpu, 2)} | {_accel(cpu, gpu, higher_better=higher)} |")
+    lines += [
+        "",
+        "_CPU — модель `bonsai` 27B, iGPU — `Meno-Lite-0.1` 7B (модели различаются); "
+        "ускорение отражает вклад сервинга на GPU при прочих равных условиях стенда._",
+    ]
+    if png_path:
+        lines += [
+            "",
+            f"![Сравнение CPU и iGPU]({Path(png_path).name})",
+        ]
+    return "\n".join(lines)
+
+
 def langfuse_section(langfuse: dict | None) -> str:
     """Секция мониторинга: последние трейсы Langfuse и latency спанов."""
     if not langfuse or not langfuse.get("available"):
@@ -231,11 +294,14 @@ def build_report(
     langfuse: dict | None = None,
     compose_info: dict | None = None,
     ragas_single: dict | None = None,
+    compare: dict | None = None,
+    compare_png: str | None = None,
 ) -> str:
     """Собирает полный markdown-отчёт."""
     env_lines = [f"- **{k}**: {v}" for k, v in environment.items() if v not in (None, "")]
     corpus_lines = [f"- **{k}**: {v}" for k, v in corpus.items() if v not in (None, "")]
     single_section = ragas_single_section(ragas_single)
+    compare_section = cpu_gpu_section(compare, compare_png)
     return "\n\n".join(
         [
             "# RAG по нормативным документам — отчёт о качестве и производительности",
@@ -276,18 +342,27 @@ def build_report(
                     load_table(loads or []),
                 ]
             ),
-            "\n".join(["## 6. Мониторинг Langfuse (трейсы и latency)", langfuse_section(langfuse)]),
-            "\n".join(["## 7. Тесты", tests_section(pytest_text)]),
             "\n".join(
                 [
-                    "## 8. Каталог рекомендованных РФ-моделей для локального RAG",
+                    "## 6. Сравнение CPU и iGPU (Vulkan)",
+                    "Сопоставление качества и производительности одного пайплайна на CPU и на "
+                    "встроенной графике (llama.cpp Vulkan). График строится `scripts/compare_plots.py`.",
+                    "",
+                    compare_section,
+                ]
+            ),
+            "\n".join(["## 7. Мониторинг Langfuse (трейсы и latency)", langfuse_section(langfuse)]),
+            "\n".join(["## 8. Тесты", tests_section(pytest_text)]),
+            "\n".join(
+                [
+                    "## 9. Каталог рекомендованных РФ-моделей для локального RAG",
                     catalog_table(models),
                 ]
             ),
-            "\n".join(["## 9. Инфраструктура и сервинг (Docker)", docker_section(compose_info)]),
+            "\n".join(["## 10. Инфраструктура и сервинг (Docker)", docker_section(compose_info)]),
             "\n".join(
                 [
-                    "## 10. Воспроизведение",
+                    "## 11. Воспроизведение",
                     "```bash",
                     "# 1) поднять стек (выберите профиль железа)",
                     "docker compose --profile ai395 --profile monitoring up -d --build      # AI MAX+ 395 (Vulkan, из исходников)",
@@ -305,7 +380,8 @@ def build_report(
                     "docker compose --profile tools run --rm app python scripts/load_test.py \\",
                     "    --url http://app:8000 --requests 40 --concurrency 4",
                     "",
-                    "# 5) экспорт трейсов Langfuse и сборка отчёта",
+                    "# 5) графики сравнения CPU и iGPU, экспорт трейсов и сборка отчёта",
+                    "docker compose --profile tools run --rm app python scripts/compare_plots.py",
                     "docker compose --profile tools run --rm app python scripts/langfuse_report.py",
                     "docker compose --profile tools run --rm app python scripts/report.py",
                     "```",

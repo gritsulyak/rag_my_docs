@@ -41,3 +41,5 @@ models/
 # IDE
 .idea/
 .vscode/
+*.swp
+*.swo

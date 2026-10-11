@@ -22,9 +22,13 @@ import argparse
 import json
 import platform
 import re
+import sys
 from pathlib import Path
 
-from normdoc.config import (
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from compare_plots import build_figure as build_comparison_figure  # noqa: E402
+
+from normdoc.config import (  # noqa: E402
     CHUNKS_JSON,
     COLLECTION_NAME,
     LLM_MODEL,
@@ -143,8 +147,27 @@ def load_langfuse() -> dict:
 
 
 def load_ragas_single() -> dict:
-    """Контрольный одиночный прогон RAGAS на golden-наборе (results/ragas_golden.json)."""
+    """Контрольный одиночный прогон RAGAS (results/ragas_golden.json)."""
     return _read_json(RESULTS_DIR / "ragas_golden.json")
+
+
+def gather_compare() -> dict:
+    """Данные для сводного сравнения CPU и iGPU (perf + нагрузка + RAGAS)."""
+    perfs = {p.get("name"): p for p in load_perfs()}
+    loads = {l.get("name"): l for l in load_loads()}
+    comparison = _read_json(RESULTS_DIR / "comparison_ragas.json")
+    gpu_cfg = comparison.get("configs", {}).get("e5_rerank_igpu", {})
+    return {
+        "perf_cpu": perfs.get("cpu"),
+        "perf_gpu": perfs.get("gpu"),
+        "load_cpu": loads.get("cpu"),
+        "load_gpu": loads.get("gpu"),
+        "ragas_cpu": _read_json(RESULTS_DIR / "ragas_e5_rerank_bonsai.json"),
+        "ragas_gpu": {
+            "metrics": gpu_cfg.get("metrics", {}),
+            "latency_s_mean": gpu_cfg.get("latency_s_mean"),
+        },
+    }
 
 
 def gather_compose_info() -> dict:
@@ -184,6 +207,14 @@ def main() -> int:
     langfuse = load_langfuse()
     pytest_text = _read_text(RESULTS_DIR / "pytest.txt")
 
+    compare_data = gather_compare()
+    compare_png = None
+    try:
+        png = build_comparison_figure(compare_data, RESULTS_DIR / "compare_cpu_gpu.png")
+        compare_png = str(png) if png else None
+    except Exception as exc:  # pragma: no cover - деградация без matplotlib
+        print(f"[report] график сравнения не построен: {exc}")
+
     report = build_report(
         comparison=comparison,
         perfs=perfs,
@@ -195,6 +226,8 @@ def main() -> int:
         langfuse=langfuse,
         compose_info=gather_compose_info(),
         ragas_single=load_ragas_single(),
+        compare=compare_data,
+        compare_png=compare_png,
     )
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

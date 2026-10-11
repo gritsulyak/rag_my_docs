@@ -51,7 +51,30 @@ HTTP-нагрузка на `/answer` под конкурентностью: RPS,
 ![Нагрузочный тест cpu](load_cpu.png)
 ![Нагрузочный тест gpu](load_gpu.png)
 
-## 6. Мониторинг Langfuse (трейсы и latency)
+## 6. Сравнение CPU и iGPU (Vulkan)
+Сопоставление качества и производительности одного пайплайна на CPU и на встроенной графике (llama.cpp Vulkan). График строится `scripts/compare_plots.py`.
+
+| Метрика | CPU | iGPU (Vulkan) | iGPU vs CPU |
+|---|---|---|---|
+| Perf: ретрив p50, с | 9.37 | 5.78 | ×1.6 |
+| Perf: генерация p50, с | 46.93 | 5.72 | ×8.2 |
+| Perf: итого p50, с | 56.38 | 11.91 | ×4.7 |
+| Perf: скорость, ток/с | 2.57 | 12.91 | ×5.0 |
+| Нагрузка: p50, с | 78.41 | 35.77 | ×2.2 |
+| Нагрузка: p95, с | 154.40 | 46.77 | ×3.3 |
+| Нагрузка: p99, с | 156.25 | 51.36 | ×3.0 |
+| Нагрузка: RPS | 0.03 | 0.11 | ×3.6 |
+| Нагрузка: скорость, ток/с | 2.39 | 4.18 | ×1.7 |
+| RAGAS: faithfulness | 0.98 | 0.75 | ×0.8 |
+| RAGAS: context precision | 0.67 | 0.98 | ×1.5 |
+| RAGAS: context recall | 0.83 | 1.00 | ×1.2 |
+| RAGAS: средняя латентность, с | 41.28 | 10.23 | ×4.0 |
+
+_CPU — модель `bonsai` 27B, iGPU — `Meno-Lite-0.1` 7B (модели различаются); ускорение отражает вклад сервинга на GPU при прочих равных условиях стенда._
+
+![Сравнение CPU и iGPU](compare_cpu_gpu.png)
+
+## 7. Мониторинг Langfuse (трейсы и latency)
 Хост: `file://results/traces_gpu.jsonl`, трейсов: **6**, средняя латентность: **13.24 с**.
 
 | Trace | Вопрос | Латентность, с | Спаны (retrieve / generate, с) | Чанков |
@@ -63,10 +86,10 @@ HTTP-нагрузка на `/answer` под конкурентностью: RPS,
 | `local-1791746058144` | Каким приказом утверждён и введён в действие ГОСТ Р 58412—2019? | 13.18 | retrieve: 4.73 / generate: 8.45 | 5 |
 | `local-1791746071768` | На каком международном стандарте основан ГОСТ Р 59407—2021? | 13.62 | retrieve: 7.25 / generate: 6.37 | 5 |
 
-## 7. Тесты
+## 8. Тесты
 Итог последнего прогона: **44 passed in 53.20s**
 
-## 8. Каталог рекомендованных РФ-моделей для локального RAG
+## 9. Каталог рекомендованных РФ-моделей для локального RAG
 | Модель | Организация | Тип | Параметры | Контекст | Лицензия | HuggingFace | Запуск |
 |---|---|---|---|---|---|---|---|
 | GigaChat3.1-10B-A1.8B | Sber / ai-sage | llm | 10B (активных 1.8B) | 262144 | см. HF | [ai-sage/GigaChat3.1-10B-A1.8B](https://huggingface.co/ai-sage/GigaChat3.1-10B-A1.8B) | llama.cpp / ollama |
@@ -90,7 +113,7 @@ HTTP-нагрузка на `/answer` под конкурентностью: RPS,
 | BAAI/bge-reranker-v2-m3 | BAAI | reranker | 0.57B | 8192 | Apache-2.0 | [BAAI/bge-reranker-v2-m3](https://huggingface.co/BAAI/bge-reranker-v2-m3) | sentence-transformers CrossEncoder |
 | Giga-Retrieval-instruct | Sber / ai-sage | reranker | —B | 8192 | см. HF | [ai-sage/Giga-Retrieval-instruct](https://huggingface.co/ai-sage/Giga-Retrieval-instruct) | transformers (trust_remote_code) |
 
-## 9. Инфраструктура и сервинг (Docker)
+## 10. Инфраструктура и сервинг (Docker)
 Приложение и инфраструктура упакованы в `docker-compose.yml`. Профили:
 
 | Профиль | Назначение | Бэкенд llama.cpp |
@@ -109,9 +132,9 @@ HTTP-нагрузка на `/answer` под конкурентностью: RPS,
 docker compose --profile ai395 --profile monitoring up -d --build
 ```
 
-Активные сервисы: `llama-vulkan`, `qdrant`, `app`, `langfuse-minio`, `langfuse-minio-init`, `langfuse-redis`, `langfuse-postgres`, `langfuse-clickhouse`, `langfuse-worker`, `langfuse-web`.
+Активные сервисы: `langfuse-minio`, `langfuse-minio-init`, `langfuse-postgres`, `langfuse-redis`, `langfuse-clickhouse`, `langfuse-worker`, `qdrant`, `langfuse-web`, `llama-vulkan`, `app`.
 
-## 10. Воспроизведение
+## 11. Воспроизведение
 ```bash
 # 1) поднять стек (выберите профиль железа)
 docker compose --profile ai395 --profile monitoring up -d --build      # AI MAX+ 395 (Vulkan, из исходников)
@@ -129,7 +152,8 @@ docker compose --profile tools run --rm app python scripts/compare_configs.py --
 docker compose --profile tools run --rm app python scripts/load_test.py \
     --url http://app:8000 --requests 40 --concurrency 4
 
-# 5) экспорт трейсов Langfuse и сборка отчёта
+# 5) графики сравнения CPU и iGPU, экспорт трейсов и сборка отчёта
+docker compose --profile tools run --rm app python scripts/compare_plots.py
 docker compose --profile tools run --rm app python scripts/langfuse_report.py
 docker compose --profile tools run --rm app python scripts/report.py
 ```
