@@ -283,7 +283,8 @@ lynx -dump "http://localhost:8000/ask?q=…"           # текстовый от
 | `GET` | `/ask` | ответ HTML-страницей по `?q=…` (без JS / консольные браузеры) |
 | `GET` | `/info` | справка о сервисе (JSON) |
 | `GET` | `/health` | статус, коллекция, модель |
-| `POST`| `/answer` | вопрос → ответ, источники, latency, usage |
+| `POST`| `/answer` | вопрос → ответ, источники (с кликабельным `url`), latency, usage |
+| `GET` | `/sources/{name}` | исходный документ (PDF из манифеста) — цель ссылок в источниках и цитатах |
 | `GET` | `/metrics` | метрики Prometheus (latency/throughput) |
 | `POST`| `/warmup` | прогрев (загрузка моделей в память) |
 
@@ -299,12 +300,17 @@ curl -s localhost:8000/answer -H 'Content-Type: application/json' -d '{
 ```json
 {
   "answer": "Стандарт утверждён приказом Росстандарта от 25.03.2025 N 215-ст и введён в действие с 30 июня 2025 года [ГОСТ Р 57100—2025, стр. 27].",
-  "sources": [{"source": "ГОСТ Р 57100—2025", "page": 27, "score": 0.83, "snippet": "…"}],
+  "sources": [{"source": "ГОСТ Р 57100—2025", "page": 27, "score": 0.83, "snippet": "…", "url": "/sources/<файл>.pdf#page=27"}],
   "latency_s": 14.2, "retrieval_s": 0.4, "generation_s": 13.8,
   "usage": {"prompt_tokens": 1200, "completion_tokens": 64, "total_tokens": 1264},
   "dropped_citations": [], "collection": "normdoc_e5_small", "model": "meno"
 }
 ```
+
+У каждого источника есть кликабельный `url` на исходный PDF (отдаётся из
+манифеста через `GET /sources/{name}`, с фрагментом `#page=N`); веб-чат и
+HTML-страница `/ask` без JS делают ссылками и список источников, и цитаты в
+ответе — видно, какие документы реально искали.
 
 CLI-чат: `uv run python scripts/chat.py` (команды `:sources`, `:quit`).
 

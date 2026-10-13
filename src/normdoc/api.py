@@ -7,6 +7,7 @@
     GET  /info     — краткая справка о сервисе (JSON);
     GET  /health   — статус, коллекция, модель;
     POST /answer   — вопрос -> ответ, источники, latency, usage (JSON, трейс Langfuse);
+    GET  /sources/{name} — исходный документ (PDF) из манифеста, ссылки из ответа;
     GET  /metrics  — метрики Prometheus (latency/throughput для нагрузочных тестов);
     GET  /docs     — интерактивная документация OpenAPI.
 
@@ -24,7 +25,7 @@ import threading
 import time
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
     CollectorRegistry,
@@ -37,6 +38,7 @@ from pydantic import BaseModel, Field
 from normdoc import webui
 from normdoc.assistant import NormDocAssistant, build_assistant
 from normdoc.config import COLLECTION_NAME, LLM_MODEL, LLM_PROVIDER, TOP_K
+from normdoc.sources import resolve_source, source_url
 
 REGISTRY = CollectorRegistry()
 
@@ -87,9 +89,14 @@ class AnswerRequest(BaseModel):
 
 class Source(BaseModel):
     source: str | None = None
+    title: str | None = None
     page: int | None = None
     score: float | None = None
     snippet: str = ""
+    url: str | None = Field(
+        None,
+        description="Кликабельная ссылка на исходный документ (с фрагментом #page=N).",
+    )
 
 
 class AnswerResponse(BaseModel):
@@ -138,7 +145,7 @@ def info() -> dict:
         "collection": COLLECTION_NAME,
         "llm_provider": LLM_PROVIDER,
         "llm_model": LLM_MODEL,
-        "endpoints": ["/", "/ask", "/health", "/answer", "/metrics", "/docs", "/info"],
+        "endpoints": ["/", "/ask", "/health", "/answer", "/sources", "/metrics", "/docs", "/info"],
     }
 
 
@@ -170,15 +177,20 @@ def _answer_impl(question: str, top_k: int) -> AnswerResponse:
     if completion:
         TOKENS.inc(int(completion))
 
-    sources = [
-        Source(
-            source=src["metadata"].get("source"),
-            page=src["metadata"].get("page"),
-            score=src.get("score"),
-            snippet=src["text"].strip().replace("\n", " ")[:240],
+    sources = []
+    for src in result.sources:
+        metadata = src["metadata"]
+        page = metadata.get("page")
+        sources.append(
+            Source(
+                source=metadata.get("source"),
+                title=metadata.get("title"),
+                page=page,
+                score=src.get("score"),
+                snippet=src["text"].strip().replace("\n", " ")[:240],
+                url=source_url(metadata.get("source"), page),
+            )
         )
-        for src in result.sources
-    ]
     return AnswerResponse(
         answer=result.answer,
         sources=sources,
@@ -216,6 +228,20 @@ def ask(
 @app.get("/metrics")
 def metrics() -> Response:
     return Response(generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)
+
+
+@app.get("/sources/{name}")
+def source_document(name: str) -> FileResponse:
+    """Отдаёт исходный документ по метке источника или имени файла.
+
+    Доступны только файлы из манифеста (см. :mod:`normdoc.sources`), поэтому
+    произвольный путь с диска запросить нельзя. Ссылки с ``#page=N`` открывают
+    PDF сразу на нужной странице (обрабатывается просмотрщиком в браузере).
+    """
+    path = resolve_source(name)
+    if path is None:
+        raise HTTPException(status_code=404, detail=f"Источник не найден: {name}")
+    return FileResponse(path, media_type="application/pdf")
 
 
 @app.post("/warmup")

@@ -14,6 +14,7 @@ f-строк, чтобы не конфликтовать с фигурными �
 
 from __future__ import annotations
 
+import re
 from html import escape
 
 __all__ = ["chat_page", "answer_page"]
@@ -128,9 +129,31 @@ CHAT_PAGE = """<!doctype html>
     return e;
   }
 
+  function linkify(text, sources) {
+    var map = {};
+    (sources || []).forEach(function (s) { if (s.url && s.source) map[s.source] = s.url; });
+    var labels = Object.keys(map);
+    var frag = document.createDocumentFragment();
+    String(text == null ? '' : text).split(/(\\[[^\\]\\n]+\\])/).forEach(function (part) {
+      if (part.charAt(0) === '[' && part.charAt(part.length - 1) === ']') {
+        for (var i = 0; i < labels.length; i++) {
+          if (part.indexOf(labels[i]) !== -1) {
+            var a = el('a', null, part);
+            a.href = map[labels[i]]; a.target = '_blank'; a.rel = 'noopener';
+            frag.appendChild(a);
+            return;
+          }
+        }
+      }
+      if (part) frag.appendChild(document.createTextNode(part));
+    });
+    return frag;
+  }
+
   function render(item) {
     out.textContent = '';
-    var ans = el('div', 'answer', item.answer);
+    var ans = el('div', 'answer');
+    ans.appendChild(linkify(item.answer, item.sources));
     out.appendChild(ans);
     var stats = 'Итого ' + item.latency_s.toFixed(2) + ' с · поиск ' + item.retrieval_s.toFixed(2) +
                 ' с · генерация ' + item.generation_s.toFixed(2) + ' с · коллекция ' + item.collection;
@@ -146,7 +169,14 @@ CHAT_PAGE = """<!doctype html>
       item.sources.forEach(function (s, i) {
         var li = el('li');
         var head = el('div');
-        head.appendChild(el('span', 'src', '[' + (i + 1) + '] ' + esc(s.source || 'документ')));
+        var nameText = '[' + (i + 1) + '] ' + esc(s.source || 'документ');
+        if (s.url) {
+          var link = el('a', 'src', nameText);
+          link.href = s.url; link.target = '_blank'; link.rel = 'noopener';
+          head.appendChild(link);
+        } else {
+          head.appendChild(el('span', 'src', nameText));
+        }
         var loc = (s.page != null ? ', стр. ' + s.page : '') +
                   (s.score != null ? ' · релевантность ' + s.score.toFixed(3) : '');
         head.appendChild(el('span', 'm', loc));
@@ -253,12 +283,49 @@ def chat_page(collection: str, model: str, top_k: int) -> str:
     )
 
 
+def _source_links(sources: list[dict]) -> dict[str, str]:
+    """Карта «метка источника -> ссылка» для подстановки в цитаты ответа."""
+    links: dict[str, str] = {}
+    for src in sources or []:
+        url = src.get("url")
+        label = src.get("source")
+        if url and label:
+            links.setdefault(str(label), str(url))
+    return links
+
+
+def _answer_html(answer: str, sources: list[dict]) -> str:
+    """Экранирует текст ответа и превращает цитаты ``[источник, стр. N]`` в ссылки."""
+    links = _source_links(sources)
+    if not links:
+        return escape(answer)
+    labels = list(links)
+    parts: list[str] = []
+    pos = 0
+    for match in re.finditer(r"\[[^\]\n]+\]", answer):
+        inner = match.group(0)
+        url = next((links[label] for label in labels if label in inner), None)
+        parts.append(escape(answer[pos:match.start()]))
+        if url:
+            href = escape(url, quote=True)
+            parts.append(f"<a href='{href}' target='_blank' rel='noopener'>{escape(inner)}</a>")
+        else:
+            parts.append(escape(inner))
+        pos = match.end()
+    parts.append(escape(answer[pos:]))
+    return "".join(parts)
+
+
 def _sources_html(sources: list[dict]) -> str:
     if not sources:
         return ""
     parts = ["<h2>Источники</h2>", "<ul>"]
     for i, src in enumerate(sources, start=1):
         name = escape(str(src.get("source") or "документ"))
+        url = src.get("url")
+        if url:
+            href = escape(str(url), quote=True)
+            name = f"<a href='{href}' target='_blank' rel='noopener'>{name}</a>"
         page = src.get("page")
         score = src.get("score")
         loc = ""
@@ -288,7 +355,7 @@ def answer_page(
 
 def render_answer(result, sources: list[dict], collection: str, model: str) -> str:
     """Собирает HTML-блок ответа + источников для серверной страницы ``/ask``."""
-    parts = [f"<div class='answer'>{escape(str(result.answer))}</div>"]
+    parts = [f"<div class='answer'>{_answer_html(str(result.answer), sources)}</div>"]
     stats = (
         f"Итого {result.latency_s:.2f} с · поиск {result.retrieval_s:.2f} с · "
         f"генерация {result.generation_s:.2f} с · коллекция {escape(str(collection))} · "

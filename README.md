@@ -280,7 +280,8 @@ lynx -dump "http://localhost:8000/ask?q=…"           # text answer in terminal
 | `GET` | `/ask` | answer as an HTML page for `?q=…` (no-JS / console browsers) |
 | `GET` | `/info` | service info (JSON) |
 | `GET` | `/health` | status, collection, model |
-| `POST`| `/answer` | question → answer, sources, latency, usage |
+| `POST`| `/answer` | question → answer, sources (with clickable `url`), latency, usage |
+| `GET` | `/sources/{name}` | source document (PDF from the manifest), target of source/citation links |
 | `GET` | `/metrics` | Prometheus metrics (latency/throughput) |
 | `POST`| `/warmup` | warm-up (load models into memory) |
 
@@ -296,12 +297,17 @@ Response:
 ```json
 {
   "answer": "The standard was approved by Rosstandart order No. 215-st and takes effect on 30 June 2025 [ГОСТ Р 57100—2025, стр. 27].",
-  "sources": [{"source": "ГОСТ Р 57100—2025", "page": 27, "score": 0.83, "snippet": "…"}],
+  "sources": [{"source": "ГОСТ Р 57100—2025", "page": 27, "score": 0.83, "snippet": "…", "url": "/sources/<file>.pdf#page=27"}],
   "latency_s": 14.2, "retrieval_s": 0.4, "generation_s": 13.8,
   "usage": {"prompt_tokens": 1200, "completion_tokens": 64, "total_tokens": 1264},
   "dropped_citations": [], "collection": "normdoc_e5_small", "model": "meno"
 }
 ```
+
+Each source carries a clickable `url` to the original PDF (served from the
+manifest by `GET /sources/{name}`, with a `#page=N` fragment); the web chat and
+the no-JS `/ask` page render both the source list and the inline citations as
+links, so it is visible which documents were actually searched.
 
 CLI chat: `uv run python scripts/chat.py` (commands `:sources`, `:quit`).
 

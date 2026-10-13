@@ -245,7 +245,16 @@ class TestApi:
         body = resp.json()
         assert body["answer"].startswith("Тестовый ответ")
         assert body["sources"][0]["page"] == 3
+        assert "url" in body["sources"][0]
         assert body["latency_s"] == 1.23
+
+    def test_answer_source_url_unknown_label(self, client):
+        # Фейковый источник "gost.pdf" не из манифеста -> ссылки нет.
+        body = client.post("/answer", json={"question": "вопрос"}).json()
+        assert body["sources"][0]["url"] is None
+
+    def test_sources_unknown(self, client):
+        assert client.get("/sources/nope.pdf").status_code == 404
 
     def test_answer_validation(self, client):
         assert client.post("/answer", json={"question": ""}).status_code == 422
@@ -274,6 +283,74 @@ class TestApi:
         assert "Тестовый ответ" in resp.text
         assert "gost.pdf" in resp.text and "Источники" in resp.text
         assert client.get("/ask").status_code == 422  # без q
+
+
+# ------------------------------------------------------------- source links
+class TestSourceLinks:
+    """Кликабельные ссылки на исходные документы (метка -> файл из манифеста)."""
+
+    @pytest.fixture()
+    def sandbox(self, tmp_path, monkeypatch):
+        import normdoc.sources as sources
+
+        pdf = tmp_path / "gost.pdf"
+        pdf.write_bytes(b"%PDF-1.4 test")
+        manifest = tmp_path / "manifest.json"
+        manifest.write_text(
+            json.dumps(
+                {
+                    "files": [
+                        {"path": "gost.pdf", "label": "ГОСТ X—2024"},
+                        {"path": "../outside.pdf", "label": "побег"},
+                        {"path": "missing.pdf", "label": "нет файла"},
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(sources, "MANIFEST_PATH", manifest)
+        monkeypatch.setattr(sources, "PDF_DIR", tmp_path)
+        monkeypatch.setattr(sources, "_MAP", None)
+        return sources, pdf
+
+    def test_resolve_and_url(self, sandbox):
+        sources, pdf = sandbox
+        assert sources.resolve_source("ГОСТ X—2024") == pdf
+        assert sources.resolve_source("gost.pdf") == pdf  # по имени файла
+        assert sources.source_url("ГОСТ X—2024", 5) == "/sources/gost.pdf#page=5"
+        assert sources.source_url("ГОСТ X—2024") == "/sources/gost.pdf"
+
+    def test_unknown_and_missing(self, sandbox):
+        sources, _ = sandbox
+        assert sources.resolve_source("Нет такого") is None
+        assert sources.resolve_source("missing.pdf") is None
+        assert sources.source_url(None, 1) is None
+        assert sources.source_url("Нет такого", 1) is None
+
+    def test_path_traversal_ignored(self, sandbox):
+        # Запись с выходом за PDF_DIR не попадает в карту.
+        sources, _ = sandbox
+        assert "побег" not in sources.source_map()
+
+    def test_answer_html_linkifies_citation(self):
+        from normdoc import webui
+
+        class _Result:
+            answer = "Текст [ГОСТ X—2024, стр. 5] и [выдумка]."
+            latency_s = 1.0
+            retrieval_s = 0.1
+            generation_s = 0.9
+            usage = None
+            dropped_citations: list[str] = []
+
+        sources = [
+            {"source": "ГОСТ X—2024", "page": 5, "score": 0.9, "snippet": "s", "url": "/sources/gost.pdf#page=5"}
+        ]
+        html = webui.render_answer(_Result(), sources, "c", "m")
+        assert "<a href='/sources/gost.pdf#page=5'" in html
+        assert "[ГОСТ X—2024, стр. 5]</a>" in html
+        # Выдуманная ссылка остаётся простым текстом.
+        assert "<a href='/sources/gost.pdf#page=5'>[выдумка]</a>" not in html
 
 
 # ----------------------------------------------------------------- llm providers
